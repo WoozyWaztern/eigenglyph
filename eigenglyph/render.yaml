@@ -1,0 +1,9 @@
+# One-click online server on render.com (free plan).
+# Push this folder to a GitHub repo → render.com → New → Blueprint → pick the repo.
+services:
+  - type: web
+    name: eigenglyph
+    runtime: node
+    plan: free
+    buildCommand: echo "no build needed"
+    startCommand: node server.js

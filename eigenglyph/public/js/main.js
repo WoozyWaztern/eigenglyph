@@ -1,0 +1,333 @@
+// ─────────────────────────────────────────────────────────────
+//  EIGENGLYPH : ΣVOID — boot, screens (login / menu / game), loop
+// ─────────────────────────────────────────────────────────────
+import { GlyphScreen } from './glyph.js';
+import { Input } from './input.js';
+import { UI, C, bigText, coverageChar } from './ui.js';
+import { Audio } from './audio.js';
+import { Net } from './net.js';
+import { Renderer } from './render3d.js';
+import { ViewModel } from './viewmodel.js';
+import { Game } from './game.js';
+import { Lobby } from './lobby.js';
+import { makePrim, setRotYXZ, hitPrim, HIT, BOX } from './prims.js';
+
+const TITLE = 'EIGENGLYPH';
+const SUBTITLE = 'Σ · V O I D   P R O T O C O L';
+
+class App {
+  constructor() {
+    const canvas = document.getElementById('screen');
+    this.settings = { sens: 1, fov: 80, fontPx: 14, detail: 2 };
+    try { Object.assign(this.settings, JSON.parse(localStorage.getItem('eg_settings') || '{}')); } catch {}
+    this.scr = new GlyphScreen(canvas);
+    this.scr.fontPx = this.settings.fontPx || 14;
+    this.scr.setDetail(this.settings.detail || 2);
+    this.input = new Input(canvas, this.scr);
+    this.audio = new Audio();
+    this.ui = new UI(this.scr, this.input, this.audio);
+    this.net = new Net();
+    this.renderer = new Renderer();
+    this.vm = new ViewModel();
+    this.game = new Game(this);
+    this.lobby = new Lobby(this);
+    this.profile = null;
+
+    this.state = 'login';
+    this.nick = localStorage.getItem('eg_nick') || '';
+    this.pass = '';
+    this.status = ''; this.statusErr = false;
+    this.creds = null;
+    this.online = 0;
+    this.time = 0; this.fps = 60; this._fpsAcc = 0; this._fpsN = 0;
+    this.ui.focus = this.nick ? 'pass' : 'nick';
+    this.cube = makePrim(); this.cube.type = BOX; this.cube.sx = this.cube.sy = this.cube.sz = 1;
+    this.titleCache = null;
+
+    window.addEventListener('resize', () => { this.scr.resize(); this.titleCache = null; });
+    const unlockAudio = () => this.audio.unlock();
+    window.addEventListener('mousedown', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+    this.input.onLockChange = locked => { if (locked && this.game.active) this.game.paused = false; };
+    this.net.on(m => this.onNet(m));
+
+    let last = performance.now();
+    const loop = now => {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      this.frame(dt);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+
+  saveSettings() { try { localStorage.setItem('eg_settings', JSON.stringify(this.settings)); } catch {} }
+
+  onNet(m) {
+    switch (m.t) {
+      case '_open':
+        if (this.creds) this.net.send({ t: 'auth', ...this.creds, silent: true });
+        break;
+      case '_close':
+        if (this.state === 'game') { this.game.stop(); this.input.unlock(); }
+        if (this.state !== 'login') { this.state = 'menu'; }
+        if (this.creds) { this.status = 'connection lost — reconnecting…'; this.statusErr = true; }
+        break;
+      case 'auth':
+        if (m.ok) {
+          this.creds = this.creds || { name: this.nick, pass: this.pass };
+          this.nick = m.name; localStorage.setItem('eg_nick', m.name);
+          if (m.stats) this.profile = m.stats;
+          this.lan = m.lan || [];
+          this.net.send({ t: 'social' });
+          if (this.state === 'login') this.ui.focus = null;
+          if (this.state === 'login') this.state = 'menu';
+          this.status = m.created ? `account created — welcome, ${m.name}` : ''; this.statusErr = false;
+        } else {
+          this.status = m.msg; this.statusErr = true; this.creds = null;
+          this.state = 'login';
+        }
+        break;
+      case 'online': this.online = m.n; break;
+      case 'profile': this.profile = m.stats; break;
+      case 'social': this.social = m; break;
+      case 'searchRes': this.searchRes = m; break;
+      case 'notice': this.lobby.notice = { text: m.text, t: 3, ok: m.ok }; break;
+      case 'welcome':
+        this.game.start(m);
+        this.state = 'game';
+        break;
+      default:
+        this.game.onNet(m);
+    }
+  }
+
+  goServer(addr) {
+    addr = String(addr || '').trim();
+    if (!addr) return;
+    if (!/^https?:\/\//.test(addr)) addr = (/^(\d+\.){3}\d+$|^localhost$/.test(addr) ? 'http://' + addr + ':3000' : /^[\d.]+:\d+$|^localhost:\d+$/.test(addr) ? 'http://' + addr : 'https://' + addr);
+    this.status = 'connecting to ' + addr + '…'; this.statusErr = false;
+    location.href = addr;
+  }
+  login() {
+    const name = this.nick.trim(), pass = this.pass;
+    if (name.length < 3) { this.status = 'nickname is too short'; this.statusErr = true; return; }
+    if (pass.length < 3) { this.status = 'password is too short'; this.statusErr = true; return; }
+    this.creds = { name, pass };
+    this.status = 'connecting…'; this.statusErr = false;
+    this.net.send({ t: 'auth', name, pass });
+  }
+  logout() {
+    this.creds = null; this.pass = ''; this.state = 'login'; this.ui.focus = 'pass';
+    this.net.ws && this.net.ws.close();
+  }
+  play(mode = 'dm') {
+    this.net.send({ t: 'join', mode });
+    this.input.lock();
+  }
+  leaveGame() {
+    this.net.send({ t: 'leave' });
+    this.game.stop();
+    this.input.unlock();
+    this.state = 'menu';
+  }
+
+  frame(dt) {
+    this.time += dt;
+    this._fpsAcc += dt; this._fpsN++;
+    if (this._fpsAcc > 0.5) { this.fps = Math.round(this._fpsN / this._fpsAcc); this._fpsAcc = 0; this._fpsN = 0; }
+    const scr = this.scr;
+    this.ui.begin(dt);
+    scr.clear(0, 0, 0, false);            // UI layer: see-through until drawn on
+    scr.art.clear(0, 0, 0, false);        // art layer: only where something is painted
+    if (this.state === 'game' && this.game.active) {
+      // auto-detail: if the PC can't keep ~30 fps, use bigger world symbols
+      this._slow = (this._slow || 0) + (dt > 0.034 ? dt : -dt * 0.5);
+      if (this._slow < 0) this._slow = 0;
+      if (this._slow > 3 && scr.detail > 1) {
+        this._slow = 0; scr.setDetail(scr.detail - 1);
+        this.game.centerMsg = { text: 'detail lowered for smoother play  ·  ESC → DETAIL', t: 3 };
+      }
+      this.game.update(dt);
+      this.game.draw(dt);
+    } else {
+      if (this.state === 'login') { scr.fine.clear(...C.bg); this.drawBackground(); this.drawLogin(); }
+      else this.lobby.draw(dt);
+    }
+    this.ui.cursor();
+    this.ui.end();
+    scr.present();
+    this.input.endFrame();
+  }
+
+  // slowly rotating ASCII cube behind the menus
+  drawBackground() {
+    const scr = this.scr.fine, cols = scr.cols, rows = scr.rows;
+    const t = this.time;
+    setRotYXZ(this.cube.m, t * 0.37, t * 0.23, t * 0.11);
+    this.cube.px = 0; this.cube.py = 0; this.cube.pz = 6.2;
+    const aspect = (cols * scr.cellW) / (rows * scr.cellH);
+    const tanY = 0.45, tanX = tanY * aspect;
+    const ramp = '.,-~:;=!*#$@';
+    const L = [-0.5, 0.6, -0.62];
+    for (let y = 0; y < rows; y++) {
+      const sy = 1 - (y + 0.5) / rows * 2;
+      for (let x = 0; x < cols; x++) {
+        const sx = (x + 0.5) / cols * 2 - 1;
+        let dx = sx * tanX, dy = sy * tanY, dz = 1;
+        const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
+        const tt = hitPrim(this.cube, 0, 0, 0, dx, dy, dz);
+        if (tt < 0) {
+          // faint drifting symbol dust
+          const h = Math.sin(x * 12.9898 + y * 78.233 + Math.floor(t * 0.5 + x * 0.01) * 3.7) * 43758.5453;
+          const f = h - Math.floor(h);
+          if (f > 0.9975) scr.put(x, y, '·', [34, 36, 42]);
+          continue;
+        }
+        const ndl = Math.max(0, HIT.nx * L[0] + HIT.ny * L[1] + HIT.nz * L[2]);
+        // face edges
+        const e = Math.min(1 - Math.abs(HIT.lx), 1 - Math.abs(HIT.ly), 1 - Math.abs(HIT.lz));
+        const ax = Math.abs(HIT.lx), ay = Math.abs(HIT.ly), az = Math.abs(HIT.lz);
+        const edge = [ax, ay, az].sort((a, b) => b - a)[1] > 0.93;
+        let lum = 0.15 + ndl * 0.75;
+        if (edge) lum = 1;
+        const ch = ramp[Math.min(ramp.length - 1, Math.floor(lum * ramp.length))];
+        const v = edge ? 70 : 22 + lum * 40;
+        scr.put(x, y, ch, [v, v + 2, v + 7], [5, 5, 7]);
+      }
+    }
+    scr.dimRect(0, 0, cols, rows, 0.75);
+  }
+
+  drawTitle(y) {
+    const scr = this.scr;
+    const w = Math.min(scr.cols - 6, 112);
+    if (!this.titleCache || this.titleCache.w !== w) {
+      this.titleCache = { w, rows: bigText(TITLE, w, scr.cellW / scr.cellH) };
+    }
+    const rows = this.titleCache.rows;
+    const x0 = Math.floor(scr.cols / 2 - w / 2);
+    const sweep = (this.time * 0.35) % 1.6 - 0.3;
+    for (let r = 0; r < rows.length; r++) {
+      for (let c = 0; c < rows[r].length; c++) {
+        const v = rows[r][c];
+        if (v < 0.08) continue;
+        const pos = c / w;
+        const glow = Math.max(0, 1 - Math.abs(pos - sweep - r * 0.01) * 9);
+        // tiny glitch
+        const glitch = Math.random() < 0.002;
+        const ch = glitch ? 'Σ∇Δλ#@'[Math.floor(Math.random() * 6)] : coverageChar(v);
+        const b = 120 + v * 90 + glow * 60;
+        scr.put(x0 + c, y + r, ch, [b, b + 2, b + 6]);
+      }
+    }
+    scr.textC(y + rows.length + 1, SUBTITLE, C.dim);
+    return y + rows.length + 3;
+  }
+
+  drawLogin() {
+    const scr = this.scr, ui = this.ui;
+    let y = Math.max(1, Math.floor(scr.rows * 0.12));
+    y = this.drawTitle(y);
+    const w = 46, h = 17;
+    const x = Math.floor(scr.cols / 2 - w / 2);
+    y = Math.max(y + 1, Math.floor(scr.rows / 2 - h / 2) + 3);
+    scr.box(x, y, w, h, C.line, C.panel);
+    scr.textC(y + 1, 'S I G N   I N', C.bright, C.panel, x + w / 2);
+    this.nick = ui.field('nick', x + 3, y + 3, w - 6, this.nick, {
+      label: 'NICKNAME', max: 16, onEnter: () => { ui.focus = 'pass'; }, onTab: () => { ui.focus = 'pass'; },
+    });
+    this.pass = ui.field('pass', x + 3, y + 7, w - 6, this.pass, {
+      label: 'PASSWORD', max: 64, mask: true, onEnter: () => this.login(), onTab: () => { ui.focus = 'nick'; },
+    });
+    if (ui.button('login', x + 3, y + 11, w - 6, 'ENTER THE VOID')) this.login();
+    scr.textC(y + 15, 'new nickname = new account', C.dim, C.panel, x + w / 2);
+    if (this.status) scr.textC(y + h + 1, this.status, this.statusErr ? C.red : C.dim);
+    // ── server: play on this PC, or join a friend / online server ──
+    const sy = y + h + 3;
+    const here = location.host;
+    if (!this.joining) {
+      const local = /^(localhost|127\.0\.0\.1)(:|$)/.test(here);
+      const lbl = `server: ${local ? 'this PC' : here}`;
+      scr.textC(sy, lbl, C.dim, null, x + w / 2 - 8);
+      if (ui.button('srv', x + w / 2 + [...lbl].length / 2 - 6, sy, 14, 'change', { h: 1, fg: C.text, bg: C.bg })) { this.joining = true; ui.focus = 'srvaddr'; this.srvAddr = ''; }
+    } else {
+      this.srvAddr = ui.field('srvaddr', x + 3, sy - 1, w - 22, this.srvAddr || '', {
+        label: 'FRIEND IP / SERVER', max: 120, placeholder: '192.168.1.5  or  game.example.com',
+        onEnter: () => this.goServer(this.srvAddr),
+      });
+      if (ui.button('srvgo', x + w - 18, sy - 1, 15, 'CONNECT')) this.goServer(this.srvAddr);
+      if (ui.button('srvhome', x + 3, sy + 2, 18, 'this PC', { h: 1, fg: C.dim, bg: C.bg })) this.goServer('localhost:' + (this.homePort || 3000));
+      if (ui.button('srvcancel', x + w - 21, sy + 2, 18, 'cancel', { h: 1, fg: C.dim, bg: C.bg })) this.joining = false;
+    }
+    if (window.installPrompt && !window.matchMedia('(display-mode: standalone)').matches) {
+      if (ui.button('install', x + 3, sy + 4, w - 6, 'INSTALL AS APP  (own window, no download)', { fg: C.bright })) {
+        window.installPrompt.prompt(); window.installPrompt = null;
+      }
+    }
+    this.drawFooter();
+  }
+
+  drawMenu() {
+    const scr = this.scr, ui = this.ui;
+    let y = Math.max(1, Math.floor(scr.rows * 0.14));
+    y = this.drawTitle(y);
+    const bw = 34;
+    const x = Math.floor(scr.cols / 2 - bw / 2);
+    y = Math.max(y + 2, Math.floor(scr.rows * 0.52));
+    if (ui.button('play', x, y, bw, 'P L A Y', { h: 5, fg: C.bright, border: C.dim })) this.play();
+    scr.textC(y + 6, `signed in as ${this.nick}`, C.dim);
+    if (ui.button('logout', x + 8, y + 8, bw - 16, 'log out', { h: 1, fg: C.dim, bg: C.bg })) {
+      this.creds = null; this.pass = ''; this.state = 'login'; this.ui.focus = 'pass';
+      this.net.ws && this.net.ws.close();
+    }
+    if (this.status) scr.textC(y + 10, this.status, this.statusErr ? C.red : C.dim);
+    this.drawFooter();
+  }
+
+  drawFooter() {
+    const scr = this.scr, y = scr.rows - 1;
+    scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
+    const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
+    scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
+    const r = 'EIGENGLYPH v1.0 · everything here is a character';
+    scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
+  }
+}
+
+// ── settings live in localStorage; on the player's own PC they are also saved by the
+//    local server (/api/prefs), so they survive private game windows ──
+const LOCAL = /^(localhost|127\.0\.0\.1)(:|$)/.test(location.host);
+function syncPrefs() {
+  if (!LOCAL) return Promise.resolve();
+  return fetch('/api/prefs').then(r => r.ok ? r.json() : {}).then(p => {
+    for (const [k, v] of Object.entries(p || {})) if (k.startsWith('eg_')) try { localStorage.setItem(k, v); } catch {}
+  }).catch(() => {}).finally(() => {
+    const orig = Storage.prototype.setItem;
+    let t = null;
+    Storage.prototype.setItem = function (k, v) {
+      orig.call(this, k, v);
+      if (!String(k).startsWith('eg_')) return;
+      clearTimeout(t);
+      t = setTimeout(push, 200);
+    };
+    addEventListener('pagehide', push);
+  });
+  function push() {
+    const all = {};
+    for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (key.startsWith('eg_')) all[key] = localStorage.getItem(key); }
+    navigator.sendBeacon ? navigator.sendBeacon('/api/prefs', JSON.stringify(all)) : fetch('/api/prefs', { method: 'POST', body: JSON.stringify(all) }).catch(() => {});
+  }
+}
+
+// ── "install as app": the browser can install the game with its own window and icon ──
+window.installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); window.installPrompt = e; });
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || LOCAL)) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+syncPrefs().then(() => {
+  try { window.app = new App(); }
+  catch (e) {
+    document.body.innerHTML = `<pre style="color:#ccc;font:14px monospace;padding:20px">EIGENGLYPH failed to start:\n${e.message}</pre>`;
+    console.error(e);
+  }
+});

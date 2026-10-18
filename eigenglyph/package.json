@@ -1,0 +1,10 @@
+{
+  "name": "eigenglyph",
+  "version": "1.0.0",
+  "description": "EIGENGLYPH : ΣVOID — multiplayer first-person 3D shooter where everything is made of symbols",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
