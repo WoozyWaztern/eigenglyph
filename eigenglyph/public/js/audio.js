@@ -176,6 +176,76 @@ export class Audio {
     if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0, 0.35);
     this._tone(o, t, 'sine', 880, 990, 0.08, 0.3);
   }
+  // ── shop weapons ──
+  rifle(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol * 0.8);
+    this._noise(o, t, 0.25, 'lowpass', 3200, 0.7, 1.0, 0.16);
+    this._noise(o, t, 0.08, 'highpass', 4000, 0.8, 0.45, 0.05);
+    this._tone(o, t, 'square', 180, 60, 0.07, 0.35);
+    this._noise(o, t + 0.03, 0.4, 'lowpass', 700, 0.4, 0.18, 0.35);
+  }
+  pistol(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol * 0.75);
+    this._noise(o, t, 0.2, 'bandpass', 2400, 0.8, 1.0, 0.12);
+    this._tone(o, t, 'triangle', 420, 90, 0.08, 0.5);
+    this._noise(o, t + 0.02, 0.3, 'lowpass', 900, 0.5, 0.15, 0.25);
+  }
+  magOut() {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0.15, 0.8);
+    this._noise(o, t, 0.06, 'bandpass', 1800, 5, 0.5, 0.05);
+    this._tone(o, t + 0.05, 'square', 500, 250, 0.04, 0.12);
+  }
+  magIn() {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0.15, 0.9);
+    this._noise(o, t, 0.05, 'bandpass', 2600, 5, 0.7, 0.04);
+    this._tone(o, t, 'square', 1100, 700, 0.03, 0.18);
+  }
+  batSwing(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol);
+    const f = this._noise(o, t + 0.1, 0.45, 'bandpass', 300, 1.5, 0.7, 0.35);
+    f.frequency.exponentialRampToValueAtTime(1400, t + 0.35);
+  }
+  batHit(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol);
+    this._tone(o, t, 'sine', 160, 50, 0.22, 1.1);
+    this._noise(o, t, 0.12, 'bandpass', 900, 1.2, 0.8, 0.1);
+    this._tone(o, t, 'triangle', 700, 400, 0.05, 0.25);   // wooden "tok"
+  }
+  glass(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol);
+    for (let i = 0; i < 5; i++) this._tone(o, t + i * 0.025 + Math.random() * 0.02, 'sine', 2500 + Math.random() * 3000, 1800, 0.12, 0.12);
+    this._noise(o, t, 0.25, 'highpass', 5000, 0.7, 0.6, 0.2);
+  }
+  whoosh(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol);
+    const f = this._noise(o, t + 0.04, 1.0, 'lowpass', 300, 0.8, 0.9, 0.9);
+    f.frequency.exponentialRampToValueAtTime(2200, t + 0.3);
+    this._tone(o, t, 'sine', 90, 40, 0.6, 0.5);
+  }
+  crackle(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol * 0.5);
+    for (let i = 0; i < 3; i++) this._noise(o, t + Math.random() * 0.08, 0.02, 'bandpass', 1500 + Math.random() * 3000, 3, 0.4 + Math.random() * 0.4, 0.015);
+    this._noise(o, t, 0.2, 'lowpass', 400, 0.6, 0.15, 0.18);
+  }
+  lighter() {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0.2, 0.7);
+    this._noise(o, t, 0.04, 'highpass', 5000, 1, 0.5, 0.03);
+    const f = this._noise(o, t + 0.05, 0.4, 'bandpass', 600, 1, 0.35, 0.35);
+    f.frequency.linearRampToValueAtTime(1200, t + 0.4);
+  }
+  zip() {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0, 0.6);
+    for (let i = 0; i < 8; i++) this._noise(o, t + i * 0.03, 0.02, 'bandpass', 3000 + i * 150, 4, 0.35, 0.02);
+  }
+
+  groan(pan = 0, vol = 1) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol * 0.7);
+    const f0 = 90 + Math.random() * 40;
+    this._tone(o, t, 'sawtooth', f0, f0 * 0.6, 0.7, 0.25);
+    const f = this._noise(o, t, 0.7, 'bandpass', 500, 2, 0.35, 0.6);
+    f.frequency.linearRampToValueAtTime(260, t + 0.6);
+  }
+
   uiHover() {
     if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0, 0.25);
     this._tone(o, t, 'square', 1200, 1100, 0.025, 0.08);

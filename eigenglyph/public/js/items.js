@@ -31,14 +31,81 @@ export const ITEM_PARTS = [
     [CYL, M.CAN, 0, 0, 0, 0.034, 0, 0.066, I3, 1],                  // can
     [CYL, M.CAN_TOP, 0, 0, 0.069, 0.03, 0, 0.004, I3],              // lid
   ],
+  [ // 3 DARK AK-47   (tag 2 = bolt, tag 3 = magazine) — real proportions, ~1 m long
+    [BOX, M.AKBLACK, 0, 0, 0, 0.025, 0.032, 0.17, I3],               // receiver
+    [CYL, M.AKBLACK, 0, 0.022, 0, 0.024, 0, 0.15, I3],              // rounded dust cover
+    [BOX, M.STEEL, 0.03, 0.008, 0.09, 0.007, 0.006, 0.014, I3, 2],   // charging handle
+    [BOX, M.AKBLACK, 0, 0.05, 0.19, 0.016, 0.013, 0.03, I3],        // rear sight block
+    [CYL, M.AKBLACK, 0, 0.0, 0.34, 0.011, 0, 0.17, I3],             // barrel
+    [CYL, M.AKBLACK, 0, 0.036, 0.3, 0.014, 0, 0.1, I3],             // gas tube
+    [BOX, M.POLY, 0, -0.004, 0.28, 0.027, 0.026, 0.1, I3],          // handguard
+    [BOX, M.AKBLACK, 0, 0.018, 0.42, 0.015, 0.025, 0.02, I3],       // gas block
+    [BOX, M.AKBLACK, 0, 0.05, 0.47, 0.005, 0.028, 0.006, I3],       // front sight post
+    [CYL, M.AKBLACK, 0, 0.0, 0.53, 0.016, 0, 0.026, I3],            // muzzle brake
+    [BOX, M.POLY, 0, -0.09, 0.06, 0.017, 0.06, 0.034, rot(0, -0.25, 0), 3],    // magazine (top)
+    [BOX, M.POLY, 0, -0.193, 0.106, 0.017, 0.055, 0.032, rot(0, -0.6, 0), 3],  // magazine (curve)
+    [BOX, M.POLY, 0, -0.082, -0.1, 0.018, 0.055, 0.024, rot(0, 0.32, 0)],      // pistol grip
+    [BOX, M.AKBLACK, 0, -0.048, -0.03, 0.005, 0.012, 0.032, I3],    // trigger guard
+    [BOX, M.STEEL, 0, -0.042, -0.035, 0.003, 0.011, 0.004, I3],     // trigger
+    [BOX, M.POLY, 0, -0.03, -0.3, 0.021, 0.038, 0.13, rot(0, 0.09, 0)],        // stock
+    [BOX, M.AKBLACK, 0, -0.044, -0.432, 0.023, 0.052, 0.008, rot(0, 0.09, 0)], // butt plate
+  ],
+  [ // 4 PISTOL   (tag 2 = slide) — Glock-like, ~19 cm
+    [BOX, M.GUNMETAL, 0, 0.025, 0.035, 0.0125, 0.017, 0.095, I3, 2], // slide
+    [BOX, M.GRIP, 0, -0.001, 0.035, 0.011, 0.01, 0.085, I3],        // frame
+    [CYL, M.STEEL, 0, 0.027, 0.131, 0.007, 0, 0.004, I3, 2],        // barrel tip
+    [BOX, M.STEEL, 0, 0.045, 0.12, 0.003, 0.004, 0.004, I3, 2],     // front sight
+    [BOX, M.STEEL, 0, 0.045, -0.05, 0.009, 0.004, 0.004, I3, 2],    // rear sight
+    [BOX, M.GRIP, 0, -0.06, -0.033, 0.0125, 0.056, 0.024, rot(0, 0.36, 0)],  // grip
+    [BOX, M.GRIP, 0, -0.026, 0.03, 0.004, 0.003, 0.026, I3],        // trigger guard (bottom)
+    [BOX, M.GRIP, 0, -0.019, 0.054, 0.004, 0.009, 0.003, I3],       // trigger guard (front)
+    [BOX, M.STEEL, 0, -0.017, 0.022, 0.003, 0.008, 0.003, I3],      // trigger
+  ],
+  [ // 5 HUNTING KNIFE
+    [BOX, M.WOOD, 0, 0, -0.075, 0.019, 0.026, 0.08, I3],            // handle
+    [BOX, M.BRASS, 0, 0, -0.163, 0.023, 0.031, 0.011, I3],          // pommel
+    [BOX, M.BRASS, 0, 0, 0.012, 0.024, 0.054, 0.008, I3],           // guard
+    [BOX, M.BLADE, 0, 0.004, 0.14, 0.006, 0.036, 0.12, I3],         // blade
+    [BOX, M.BLADE, 0, 0.0, 0.29, 0.005, 0.025, 0.048, rot(0, 0.45, 0)],      // clip point
+    [BOX, M.GUNMETAL, 0.0065, 0.016, 0.13, 0.001, 0.006, 0.085, I3], // fuller
+  ],
+  [ // 6 BASEBALL BAT
+    [CYL, M.TAPE, 0, 0, -0.16, 0.017, 0, 0.12, I3],                 // grip tape
+    [CYL, M.BATWOOD, 0, 0, -0.29, 0.027, 0, 0.012, I3],             // knob
+    [CYL, M.BATWOOD, 0, 0, 0.04, 0.022, 0, 0.09, I3],               // taper
+    [CYL, M.BATWOOD, 0, 0, 0.17, 0.029, 0, 0.05, I3],               // taper 2
+    [CYL, M.BATWOOD, 0, 0, 0.34, 0.035, 0, 0.13, I3],               // barrel
+    [SPHERE, M.BATWOOD, 0, 0, 0.465, 0.035, 0, 0, I3],              // rounded end
+  ],
+  [ // 7 MOLOTOV (axis = z)   (tag 4 = flame)
+    [CYL, M.GLASS, 0, 0, 0, 0.04, 0, 0.068, I3],                    // bottle
+    [CYL, M.GLASS, 0, 0, 0.083, 0.028, 0, 0.016, I3],               // shoulder
+    [CYL, M.GLASS, 0, 0, 0.122, 0.014, 0, 0.028, I3],               // neck
+    [BOX, M.RAG, 0, 0, 0.162, 0.017, 0.017, 0.022, I3],             // rag in the neck
+    [BOX, M.RAG, 0.017, 0, 0.13, 0.004, 0.013, 0.032, I3],          // rag hanging down
+    [CYL, M.RAG, 0, 0, -0.005, 0.0405, 0, 0.03, I3],                // label wrap
+    [SPHERE, M.FLAME, 0, 0, 0.198, 0.02, 0, 0, I3, 4],              // flame
+  ],
+  [ // 8 MEDKIT
+    [BOX, M.MEDWHITE, 0, 0, 0, 0.1, 0.068, 0.034, I3],              // case
+    [BOX, M.MEDRED, 0, 0, 0.035, 0.019, 0.048, 0.002, I3],          // cross |
+    [BOX, M.MEDRED, 0, 0, 0.035, 0.048, 0.019, 0.002, I3],          // cross -
+    [BOX, M.MEDRED, 0, 0, -0.035, 0.019, 0.048, 0.002, I3],
+    [BOX, M.MEDRED, 0, 0, -0.035, 0.048, 0.019, 0.002, I3],
+    [BOX, M.GRIP, 0, 0.084, 0, 0.042, 0.006, 0.01, I3],             // handle
+    [BOX, M.GRIP, -0.036, 0.074, 0, 0.006, 0.008, 0.009, I3],
+    [BOX, M.GRIP, 0.036, 0.074, 0, 0.006, 0.008, 0.009, I3],
+  ],
 ];
 
 const tmp = new Float32Array(9);
 // write the item's prims into pool starting at n; returns new n
 // pos: world position of item origin, R: item rotation (3x3, columns), s: scale
-export function placeItem(pool, n, out, w, pos, R, s = 1, th = 1) {
+// offs: optional { [tag]: [dx, dy, dz] | null } — moves (or hides, null) tagged parts (slide, magazine…)
+export function placeItem(pool, n, out, w, pos, R, s = 1, th = 1, offs = null) {
   for (const part of ITEM_PARTS[w]) {
-    const [type, mat, x, y, z, a, b, c, lr, tag] = part;
+    let [type, mat, x, y, z, a, b, c, lr, tag] = part;
+    if (offs && tag && tag in offs) { const o = offs[tag]; if (!o) continue; x += o[0]; y += o[1]; z += o[2]; }
     const p = pool[n++];
     p.type = type; p.mat = mat; p.tag = tag || 0;
     // th > 1 makes the item chunkier (thicker, same length) — used for icons
@@ -57,8 +124,10 @@ export function placeItem(pool, n, out, w, pos, R, s = 1, th = 1) {
 // Every cell is sampled 3×3. Cells fully covered get a shading symbol,
 // partly covered cells get the symbol whose shape matches best
 // (_ - | / \ [ ] ...) — so thin barrels and blades become clean lines.
-const iconPool = Array.from({ length: 8 }, makePrim);
+const iconPool = Array.from({ length: 20 }, makePrim);
 const RAMP = '.,-~:;=!*#$@';
+// icons: evenly filled symbols (no '=' '-' stripes that make items look flat)
+const ICON_RAMP = ':;+*o%#&@';
 const TEMPLATES = [
   ['_', '000000111'], ['-', '000111000'], ['‾', '111000000'], ['=', '111000111'],
   ['|', '010010010'], ['/', '001010100'], ['\\', '100010001'], ['[', '100100100'], [']', '001001001'],
@@ -66,6 +135,19 @@ const TEMPLATES = [
   ['/', '011110100'], ['\\', '110011001'], ['/', '001011110'], ['\\', '100110011'],
   ['L', '100100111'], ['J', '001001111'], ['F', '111100100'], ['7', '111001001'],
 ].map(([c, m]) => [c, [...m].map(Number)]);
+
+// how each item is posed in its icon: rotation, scale, center along its length, thickness boost
+const ICONS = [
+  { yaw: Math.PI / 2 - 0.42, pitch: -0.12, roll: -0.35, s: 1.45, c: 0.16, th: 1.25, spin: 0.3 },               // shotgun
+  { yaw: Math.PI / 2 - 0.42, pitch: -0.3, roll: -0.3, s: 2.6, c: 0.12, th: 1.25, spin: 0.3 },                   // knife
+  { yaw: 0.5, pitch: -Math.PI / 2 + 0.3, s: 6.8, c: 0, th: 1, spin: 2, aspect: 1 },                             // soda
+  { yaw: Math.PI / 2 - 0.42, pitch: -0.12, roll: -0.35, s: 1.6, c: 0.05, th: 1.15, spin: 0.3, oy: 0.06 },       // ak47
+  { yaw: Math.PI / 2 - 0.5, pitch: -0.05, roll: -0.35, s: 5.6, c: 0.035, th: 1, spin: 0.4, oy: 0.012, aspect: 1.3 }, // pistol
+  { yaw: Math.PI / 2 - 0.42, pitch: -0.35, roll: -0.3, s: 3.0, c: 0.07, th: 1.15, spin: 0.3 },                  // hunting knife
+  { yaw: Math.PI / 2 - 0.42, pitch: -0.4, roll: 0, s: 2.0, c: 0.09, th: 1.15, spin: 0.3 },                      // bat
+  { yaw: 0.5, pitch: -Math.PI / 2 + 0.35, s: 3.4, c: 0.07, th: 1, spin: 2, aspect: 0.8 },                      // molotov
+  { yaw: 0.42, pitch: 0.36, s: 4.4, c: 0, th: 1, spin: 1.2, aspect: 1.3, oy: -0.012 },                          // medkit
+];
 
 // cached wrapper: inactive icons are static, the active one re-renders ~10×/s
 const iconCache = new Map();
@@ -87,15 +169,17 @@ export function drawItemIcon(layer, x0, y0, w, h, item, t, active, bg) {
 function renderItemIcon(layer, x0, y0, w, h, item, t, active, bg) {
   const prims = [];
   const spin = active ? Math.sin(t * 1.4) * 0.35 : 0;
-  let R, center, s;
-  // shotgun and knife lie diagonally (classic inventory icon look)
-  if (item === 0) { R = rot(Math.PI / 2 + spin * 0.3, -0.18, 0.1); center = 0.16; s = 1.5; }
-  else if (item === 1) { R = rot(Math.PI / 2 + spin * 0.3, -0.35, 0); center = 0.12; s = 2.7; }
-  else { R = rot(0.5 + spin * 2, -Math.PI / 2 + 0.3, 0); center = 0; s = 7.5; }
-  const D = 2.0;
-  const pos = [-(R[6] * center * s), -(R[7] * center * s), -D - R[8] * center * s];
-  placeItem(iconPool, 0, prims, item, pos, R, s, item === 2 ? 1 : 2.2);
   const aspect = (w * layer.cellW) / (h * layer.cellH);
+  const ic = ICONS[item] || ICONS[0];
+  // guns/blades lie diagonally (classic inventory icon look), cans and bottles stand
+  const R = rot(ic.yaw + spin * ic.spin, ic.pitch, ic.roll || 0);
+  // fit: the icon frame may be wide (hotbar) or almost square (shop cards)
+  const fit = Math.min(1, aspect / (ic.aspect || 1.8));
+  const s = ic.s * fit, center = ic.c;
+  const D = 2.0;
+  const off = ic.oy || 0;
+  const pos = [-(R[6] * center * s), -(R[7] * center * s) + off * s, -D - R[8] * center * s];
+  placeItem(iconPool, 0, prims, item, pos, R, s, ic.th);
   const tanY = 0.26, tanX = tanY * aspect;
   const Lx = -0.45, Ly = 0.7, Lz = 0.55;
   const sub = new Array(9);
@@ -127,7 +211,7 @@ function renderItemIcon(layer, x0, y0, w, h, item, t, active, bg) {
       let lum = lumSum / covered;
       if (!active) lum *= 0.75;
       let ch;
-      if (covered >= 8) ch = RAMP[Math.min(RAMP.length - 1, Math.floor(lum * RAMP.length))];
+      if (covered >= 8) ch = ICON_RAMP[Math.max(0, Math.min(ICON_RAMP.length - 1, Math.floor((lum - 0.25) * ICON_RAMP.length * 0.9)))];
       else {
         let bd = 99;
         for (const [c, m] of TEMPLATES) {
@@ -139,7 +223,12 @@ function renderItemIcon(layer, x0, y0, w, h, item, t, active, bg) {
       }
       let col = BASE[bp.mat].c;
       if (bp.mat === M.CAN && Math.abs(blz) < bp.sz * 0.4) col = [190, 190, 196];   // label band
-      const k = 0.45 + lum * 1.15;
+      if (bp.mat === M.FLAME) {             // flickering flame on the molotov rag
+        const f = Math.sin(t * 40 + xx * 3.1 + yy * 1.7) * 0.5 + 0.5;
+        col = [255, 120 + f * 110, 30 + f * 40]; lum = 1;
+        if (covered < 8) ch = '^*\''[(xx + yy + Math.floor(t * 12)) % 3];
+      }
+      const k = 0.62 + lum * 1.1;
       layer.put(x0 + xx, y0 + yy, ch, [col[0] * k, col[1] * k, col[2] * k], bg);
     }
   }

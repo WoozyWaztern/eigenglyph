@@ -74,6 +74,7 @@ type stats struct {
 	Wins    int        `json:"wins"`
 	Matches int        `json:"matches"`
 	History []matchRec `json:"history"`
+	Inv     []string   `json:"inv"`
 }
 
 func statsOf(a *account) *stats {
@@ -88,6 +89,9 @@ func statsOf(a *account) *stats {
 	}
 	if a.Stats.Since == 0 {
 		a.Stats.Since = a.Created
+	}
+	if a.Stats.Inv == nil {
+		a.Stats.Inv = []string{}
 	}
 	return a.Stats
 }
@@ -206,7 +210,7 @@ func onSocial(c *conn, t string, m M) {
 		}
 		c.send(M{"t": "profileView", "p": M{"name": other.Name, "rp": st.RP, "stars": st.Stars, "kills": st.Kills, "deaths": st.Deaths,
 			"wins": st.Wins, "matches": st.Matches, "since": st.Since, "history": h, "friends": len(other.Friends),
-			"online": oc != nil, "ingame": oc != nil && oc.player != nil, "rel": relation(me, key)}})
+			"online": oc != nil, "ingame": oc != nil && oc.player != nil, "rel": relation(me, key), "inv": st.Inv}})
 	case "search":
 		q := strings.ToLower(strings.TrimSpace(fmt.Sprint(m["q"])))
 		if q == "<nil>" {
@@ -321,6 +325,7 @@ func matchInfo() M {
 }
 func startMatch() {
 	matchPhase, matchEnds = "play", now()+matchTime
+	fires, pendingFires = nil, nil
 	for _, p := range players {
 		p.Kills, p.Deaths = 0, 0
 		spawnP(p)
@@ -536,6 +541,10 @@ type player struct {
 	Wounds   [][4]float64 `json:"wounds"`
 	c        *conn
 	deadUntil, protUntil, lastShot, lastKnife, lastDrink, lastChat float64
+	lastFire                                      map[int]float64
+	lastMelee, lastMed, lastThrow, burnUntil, burnTick float64
+	molotovs                                      int
+	burnBy                                        *player
 }
 
 var (
@@ -594,6 +603,7 @@ func spawnP(p *player) {
 	p.Pitch, p.HP, p.Dead = 0, maxHP, false
 	p.Wounds = nil
 	p.protUntil = now() + 1.5
+	p.burnUntil, p.burnBy, p.burnTick, p.molotovs, p.lastMed = 0, nil, 0, molCount, -99
 }
 
 func joinGame(c *conn) {
@@ -609,7 +619,7 @@ func joinGame(c *conn) {
 	for _, o := range players {
 		list = append(list, pub(o))
 	}
-	c.send(M{"t": "welcome", "id": p.ID, "you": pub(p), "players": list})
+	c.send(M{"t": "welcome", "id": p.ID, "you": pub(p), "players": list, "inv": statsOf(c.acc).Inv, "fires": firesList()})
 	broadcast(M{"t": "join", "p": pub(p)}, c)
 	sysMsg(p.Name + " entered the void")
 	if matchPhase == "idle" {
@@ -636,26 +646,39 @@ func damage(t, a *player, dmg int, weapon string, wounds [][4]float64, pts [][3]
 	if t.Dead || matchPhase != "play" {
 		return
 	}
+	if a != nil && players[a.ID] != a {
+		a = nil // the attacker (e.g. a molotov thrower) already left
+	}
+	aid := 0
+	if a != nil {
+		aid = a.ID
+	}
 	t.HP = max(0, t.HP-dmg)
 	t.Wounds = append(t.Wounds, wounds...)
 	if len(t.Wounds) > 28 {
 		t.Wounds = t.Wounds[len(t.Wounds)-28:]
 	}
-	broadcast(M{"t": "hit", "id": t.ID, "by": a.ID, "dmg": dmg, "hp": t.HP, "w": weapon, "wounds": wounds, "pts": pts}, nil)
+	broadcast(M{"t": "hit", "id": t.ID, "by": aid, "dmg": dmg, "hp": t.HP, "w": weapon, "wounds": wounds, "pts": pts}, nil)
 	if t.HP <= 0 {
 		t.Dead = true
 		t.deadUntil = now() + 3.5
+		t.burnUntil = 0
 		t.Deaths++
-		a.Kills++
-		sa, sv := statsOf(a.c.acc), statsOf(t.c.acc)
-		sa.Kills++
-		sa.RP += 2
-		sa.Stars += 5
+		sv := statsOf(t.c.acc)
 		sv.Deaths++
-		sendProfile(a.c)
+		kk, kd := 0, 0
+		if a != nil {
+			a.Kills++
+			sa := statsOf(a.c.acc)
+			sa.Kills++
+			sa.RP += 2
+			sa.Stars += 5
+			sendProfile(a.c)
+			kk, kd = a.Kills, a.Deaths
+		}
 		sendProfile(t.c)
 		saveSoon()
-		broadcast(M{"t": "kill", "victim": t.ID, "killer": a.ID, "w": weapon, "vk": t.Kills, "vd": t.Deaths, "kk": a.Kills, "kd": a.Deaths}, nil)
+		broadcast(M{"t": "kill", "victim": t.ID, "killer": aid, "w": weapon, "vk": t.Kills, "vd": t.Deaths, "kk": kk, "kd": kd}, nil)
 	}
 }
 
@@ -868,6 +891,9 @@ func handle(c *conn, raw string) {
 		return
 	}
 	switch t {
+	case "buy":
+		onBuy(c, m)
+		return
 	case "social", "viewProfile", "search", "friendAdd", "friendAccept", "friendDecline", "friendRemove":
 		onSocial(c, t, m)
 		return
@@ -899,7 +925,7 @@ func handle(c *conn, raw string) {
 			p.Z = math.Max(0, math.Min(D, z))
 			p.Yaw, p.Pitch = yaw, pitch
 		}
-		if w, ok := m["w"].(float64); ok && (w == 0 || w == 1 || w == 2) {
+		if w, ok := m["w"].(float64); ok && w == math.Floor(w) && owns(p, int(w)) {
 			p.W = int(w)
 		}
 	case "shoot":
@@ -908,6 +934,14 @@ func handle(c *conn, raw string) {
 		onKnife(p, m)
 	case "drink":
 		onDrink(p)
+	case "fire":
+		onFire(p, m)
+	case "melee":
+		onMelee(p, m)
+	case "throw":
+		onThrow(p, m)
+	case "medkit":
+		onMedkit(p)
 	case "chat":
 		tt := now()
 		if tt-p.lastChat < 0.35 {
@@ -987,6 +1021,7 @@ func tick() {
 				broadcast(M{"t": "respawn", "id": p.ID, "x": r3(p.X), "y": 0, "z": r3(p.Z), "yaw": r3(p.Yaw)}, nil)
 			}
 		}
+		fireTick(tt)
 		if matchPhase == "play" && tt > matchEnds {
 			endMatch()
 		} else if matchPhase == "results" && tt > matchEnds {
@@ -1005,7 +1040,11 @@ func tick() {
 				if p.Dead {
 					d = 1
 				}
-				snap = append(snap, []any{p.ID, r3(p.X), r3(p.Y), r3(p.Z), r3(p.Yaw), r3(p.Pitch), p.W, p.HP, d})
+				b := 0
+				if p.burnUntil > tt {
+					b = 1
+				}
+				snap = append(snap, []any{p.ID, r3(p.X), r3(p.Y), r3(p.Z), r3(p.Yaw), r3(p.Pitch), p.W, p.HP, d, b})
 			}
 			broadcast(M{"t": "s", "p": snap}, nil)
 		}

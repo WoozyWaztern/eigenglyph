@@ -1,5 +1,8 @@
 # One-click online server on render.com (free plan).
 # Push this folder to a GitHub repo → render.com → New → Blueprint → pick the repo.
+# Accounts are kept in a free Upstash Redis database (render's free disk is wiped
+# every time the server sleeps). Put the two values from upstash.com into
+# render → your service → Environment.
 services:
   - type: web
     name: eigenglyph
@@ -7,3 +10,9 @@ services:
     plan: free
     buildCommand: echo "no build needed"
     startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

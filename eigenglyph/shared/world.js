@@ -22,7 +22,106 @@ export const WEAPONS = {
   shotgun: { dmg: 27, cooldown: 0.85, range: 40 },
   knife:   { dmg: 7,  cooldown: 0.36, range: 2.4 },
   soda:    { heal: 25, cooldown: 7 },
+  ak47:    { dmg: 9,  cooldown: 0.105, range: 60, mag: 30, reload: 2.3, spread: 0.014, auto: true },
+  pistol:  { dmg: 17, cooldown: 0.26, range: 50, mag: 12, reload: 1.45, spread: 0.008 },
+  hknife:  { dmg: 15, cooldown: 0.55, range: 2.6 },
+  bat:     { dmg: 24, cooldown: 0.9, range: 2.9, push: 8 },
+  molotov: { count: 2, speed: 15, fireR: 2.4, fireT: 6, burnT: 3, burnDmg: 5, tick: 0.5, cooldown: 1.2 },
+  medkit:  { heal: 60, cooldown: 20, use: 1.4 },
 };
+
+// ── SHOP / INVENTORY ──
+// Every item has a fixed index (= its 3D model and the "w" sent over the network).
+// Starter items belong to everyone; the rest are bought for ★ stars in the SHOP.
+export const CATS = [
+  { id: 'primary',   name: 'PRIMARY',   ru: 'основное',      g: '1', key: 1 },
+  { id: 'secondary', name: 'SECONDARY', ru: 'пистолеты',     g: '2', key: 2 },
+  { id: 'melee',     name: 'MELEE',     ru: 'ближний бой',   g: '3', key: 3 },
+  { id: 'utility',   name: 'UTILITY',   ru: 'снаряжение',    g: '4', key: 4 },
+];
+export const ITEMS = [
+  { id: 'shotgun', name: 'SHOTGUN',      cat: 'primary',   kind: 'shotgun', price: 0, starter: true,
+    desc: ['pump-action, 8 pellets.', 'devastating up close.'] },
+  { id: 'knife',   name: 'KNIFE',        cat: 'melee',     kind: 'knife',   price: 0, starter: true,
+    desc: ['small and fast.', 'slashes left and right.'] },
+  { id: 'soda',    name: 'SODA',         cat: 'utility',   kind: 'drink',   price: 0, starter: true,
+    desc: ['a cold can of Σ-cola.', 'a quick sip of health.'] },
+  { id: 'ak47',    name: 'DARK AK-47',   cat: 'primary',   kind: 'gun',     price: 750,
+    desc: ['blackened assault rifle.', 'full-auto, 30 rounds.', 'hold the trigger.'] },
+  { id: 'pistol',  name: 'PISTOL',       cat: 'secondary', kind: 'gun',     price: 200,
+    desc: ['semi-auto sidearm.', 'one click = one shot.', 'fast reload.'] },
+  { id: 'hknife',  name: 'HUNTING KNIFE', cat: 'melee',    kind: 'melee',   price: 150,
+    desc: ['long clip-point blade.', 'deep cuts, slower swing.'] },
+  { id: 'bat',     name: 'BASEBALL BAT', cat: 'melee',     kind: 'melee',   price: 120,
+    desc: ['heavy wooden bat.', 'knocks players back.'] },
+  { id: 'molotov', name: 'MOLOTOV',      cat: 'utility',   kind: 'throw',   price: 350,
+    desc: ['a bottle of fire.', 'sets the ground and players', 'on fire. 2 per life.'] },
+  { id: 'medkit',  name: 'MEDKIT',       cat: 'utility',   kind: 'heal',    price: 250,
+    desc: ['field first-aid kit.', 'restores a lot of health', 'and puts out fire.'] },
+];
+export const ITEM_IDX = Object.fromEntries(ITEMS.map((it, i) => [it.id, i]));
+// what the player owns: starters + bought ids
+export function ownedItems(inv) {
+  const set = new Set(inv || []);
+  return ITEMS.map((it, i) => i).filter(i => ITEMS[i].starter || set.has(ITEMS[i].id));
+}
+// what the player takes into a match: max 4 items — one PRIMARY, SECONDARY, MELEE, UTILITY
+export const DEFAULT_LOADOUT = { primary: 'shotgun', secondary: null, melee: 'knife', utility: 'soda' };
+export function loadoutOf(stats) {
+  const inv = (stats && stats.inv) || [];
+  const lo = Object.assign({}, DEFAULT_LOADOUT, (stats && stats.loadout) || {});
+  return CATS.map(c => {
+    const id = lo[c.id];
+    const i = id ? ITEM_IDX[id] : -1;
+    if (i === undefined || i < 0) return -1;
+    const it = ITEMS[i];
+    return it.cat === c.id && (it.starter || inv.includes(it.id)) ? i : -1;
+  });
+}
+// numbers shown on the item card (0..1 bars + text)
+export function itemStats(id) {
+  const W = WEAPONS[id] || {};
+  switch (id) {
+    case 'shotgun': return [['DAMAGE', W.dmg, 0.75, '27 / shot'], ['FIRE RATE', 1 / W.cooldown, 0.12, '70 / min'], ['RANGE', W.range, 0.6, 'short'], ['MAGAZINE', 6, 0.2, '6 shells']];
+    case 'knife':   return [['DAMAGE', W.dmg, 0.2, '7 / slash'], ['SPEED', 1 / W.cooldown, 0.9, 'very fast'], ['RANGE', W.range, 0.25, '2.4 m'], ['WEIGHT', 0, 0.1, 'light']];
+    case 'soda':    return [['HEAL', W.heal, 0.3, '+25 HP'], ['COOLDOWN', W.cooldown, 0.35, '7 s'], ['USE TIME', 1.6, 0.5, '1.6 s'], ['USES', 0, 1, 'unlimited']];
+    case 'ak47':    return [['DAMAGE', W.dmg, 0.3, '9 / bullet'], ['FIRE RATE', 1 / W.cooldown, 1, '570 / min'], ['RANGE', W.range, 1, 'long'], ['MAGAZINE', W.mag, 0.9, '30 rounds']];
+    case 'pistol':  return [['DAMAGE', W.dmg, 0.5, '17 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.45, '230 / min'], ['RANGE', W.range, 0.8, 'medium'], ['MAGAZINE', W.mag, 0.4, '12 rounds']];
+    case 'hknife':  return [['DAMAGE', W.dmg, 0.45, '15 / slash'], ['SPEED', 1 / W.cooldown, 0.6, 'fast'], ['RANGE', W.range, 0.3, '2.6 m'], ['BLEED', 0, 0.7, 'deep cuts']];
+    case 'bat':     return [['DAMAGE', W.dmg, 0.7, '24 / hit'], ['SPEED', 1 / W.cooldown, 0.35, 'slow'], ['RANGE', W.range, 0.35, '2.9 m'], ['KNOCKBACK', W.push, 0.9, 'strong']];
+    case 'molotov': return [['BURN', W.burnDmg, 0.6, '10 HP / s'], ['FIRE AREA', W.fireR, 0.7, '2.4 m'], ['FIRE TIME', W.fireT, 0.6, '6 s'], ['PER LIFE', W.count, 0.3, '2 bottles']];
+    case 'medkit':  return [['HEAL', W.heal, 0.8, '+60 HP'], ['COOLDOWN', W.cooldown, 0.8, '20 s'], ['USE TIME', W.use, 0.45, '1.4 s'], ['FIRE', 0, 1, 'puts it out']];
+  }
+  return [];
+}
+
+// molotov flight: same simulation on server (authoritative) and clients (visuals).
+// returns { x, y, z, t, hit } where it shatters; hitFn(x,y,z) → player or null
+export const THROW_G = 16;
+export function throwPath(o, v, hitFn, maxT = 4) {
+  let x = o[0], y = o[1], z = o[2], vx = v[0], vy = v[1], vz = v[2];
+  const h = 1 / 60;
+  for (let t = 0; t < maxT; t += h) {
+    const nx = x + vx * h, ny = y + vy * h, nz = z + vz * h;
+    if (ny <= 0 || solid(Math.floor(nx), Math.floor(ny), Math.floor(nz))) {
+      // shatter: the fire spreads on the floor / block top right under the bottle
+      return { x, y: groundBelow(x, y, z), z, t, hit: null };
+    }
+    if (hitFn) { const p = hitFn(nx, ny, nz); if (p) return { x: p.x, y: p.y, z: p.z, t, hit: p }; }
+    x = nx; y = ny; z = nz; vy -= THROW_G * h;
+  }
+  return { x, y: Math.max(0, y), z, t: maxT, hit: null };
+}
+export function groundBelow(x, y, z) {
+  const gx = Math.floor(x), gz = Math.floor(z);
+  for (let yy = Math.min(H - 1, Math.floor(y)); yy >= 0; yy--) if (solid(gx, yy, gz)) return yy + 1;
+  return 0;
+}
+// where a molotov flies: the thrower's eye, look direction, a bit of lob
+export function throwStart(px, py, pz, d) {
+  const W = WEAPONS.molotov;
+  return { o: [px + d[0] * 0.5, py + EYE - 0.1 + d[1] * 0.5, pz + d[2] * 0.5], v: [d[0] * W.speed, d[1] * W.speed + 3.2, d[2] * W.speed] };
+}
 
 export const voxels = new Uint8Array(W * D * H);
 const vid = (x, y, z) => (y * D + z) * W + x;
@@ -192,4 +291,22 @@ export function fromLocal(lx, ly, lz, yaw) {
   const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
   const rx = Math.cos(yaw), rz = -Math.sin(yaw);
   return [lx * rx + lz * fx, ly, lx * rz + lz * fz];
+}
+
+// ── game modes (same numbers on server and client) ──
+export const MODE_INFO = {
+  dm:     { name: 'DEATHMATCH', time: 300, ffa: true },
+  dark:   { name: 'BLACKOUT',   time: 300, ffa: true },
+  cap:    { name: 'CAPTURE Σ',  time: 360, teams: true, limit: 3 },
+  zombie: { name: 'ZOMBIES',    solo: true },
+};
+// CAPTURE Σ: the Σ waits on top of the core in the center, each team has a base on its side
+export const SIGMA_HOME = [24, 2, 24];
+export const CAP_BASES = [[4.5, 0, 24], [43.5, 0, 24]];
+export const CAP_BASE_R = 3;
+export const TEAM_COL = [[214, 70, 70], [80, 130, 230]];
+export const TEAM_NAME = ['RED', 'BLUE'];
+// zombies: wave → how many, how tough, how fast
+export function zombieWave(n) {
+  return { count: Math.min(32, 3 + n * 2), hp: 30 + n * 12, speed: Math.min(5.4, 2.4 + n * 0.18), dmg: 8 + n * 2 };
 }

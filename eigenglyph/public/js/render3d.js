@@ -16,6 +16,7 @@ let VLX = -0.4, VLY = 0.75, VLZ = -0.5;
 { const l = Math.hypot(VLX, VLY, VLZ); VLX /= l; VLY /= l; VLZ /= l; }
 
 const rc = {};
+const SAME_ID = { [M.MEDRED]: 201, [M.MEDWHITE]: 202, [M.BATWOOD]: 203, [M.GLASS]: 204, [M.RAG]: 205 };
 const FOGC = [9, 10, 15];
 
 function hash3(x, y, z) {
@@ -98,6 +99,7 @@ export class Renderer {
     const gSpace = scr.glyph(' '), gDot = scr.glyph('.'), gStar = scr.glyph('·');
     const gX = scr.glyph('x'), gSigma = scr.glyph('Σ'), gO = scr.glyph('O');
     const gWound = [scr.glyph('@'), scr.glyph('%'), scr.glyph('#'), scr.glyph(':'), scr.glyph('|'), scr.glyph('\'')];
+    const gFire = ['^', '*', '\'', '"', ',', '~'].map(c => scr.glyph(c));
 
     // ── camera basis ──
     const ox = camIn.x, oy = camIn.y, oz = camIn.z;
@@ -157,9 +159,11 @@ export class Renderer {
     const A = scr.A, B = scr.B;
     const decals = scene.floorDecals; // Map cellKey -> [[x,z,r], ...]
 
-    const C = { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, ox, oy, oz, fx, fy, fz, rx, ry, rz, ux, uy, uz,
+    const fires = (scene.fires || []).map(f => [f.x, f.y, f.z, f.r, Math.min(1, f.life / 1.2) * Math.min(1, (f.max - f.life) / 0.25 + 0.3)]);
+    const C = { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, gFire, fires, time: scene.time || 0, ox, oy, oz,
+      dark: scene.dark || null, zones: scene.zones || null, fx, fy, fz, rx, ry, rz, ux, uy, uz,
       tanX, tanY, vmTanX, vmTanY, flash, rects, vx0, vx1, vy0, vy1, decals: decals || new Map(),
-      players: players.map(p => ({ prims: p.prims, tint: p.tint, wounds: p.wounds, yaw: p.yaw, dead: p.dead, x: p.x, z: p.z })),
+      players: players.map(p => ({ prims: p.prims, tint: p.tint, wounds: p.wounds, yaw: p.yaw, dead: p.dead, x: p.x, z: p.z, y: p.y, burn: p.burn, zombie: p.zombie, sigma: p.sigma })),
       vm };
     if (!this.useWorkers(C, A, B, depth, vmId)) {
       const t0 = performance.now();
@@ -195,11 +199,21 @@ export class Renderer {
       const [cx, cy, dist] = pr;
       if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) continue;
       const di = cy * cols + cx;
+      if (p.flame) { drawFlame(scr, depth, cols, rows, cx, cy, dist, p, this.cam.tanY); continue; }
       if (depth[di] < dist - (p.hole ? 0.12 : 0.05)) continue;
       const a = p.hole ? Math.min(1, p.life / 3) : Math.min(1, p.life / p.max * 1.5);
       const fog = Math.exp(-dist * 0.035);
       const c = p.col;
       scr.put(cx, cy, p.ch, [c[0] * a * fog, c[1] * a * fog, c[2] * a * fog]);
+      if (p.tall && dist < 30) {
+        // flame tongue: a few more symbols stacked above, fading and cooling towards the tip
+        const n = dist < 8 ? 3 : dist < 16 ? 2 : 1;
+        for (let k = 1; k <= n && cy - k >= 0; k++) {
+          if (depth[(cy - k) * cols + cx] < dist - 0.05) break;
+          const f = (1 - k / (n + 1)) * a * fog;
+          scr.put(cx, cy - k, k === n ? '\'' : k === 1 ? '^' : '!', [c[0] * f, c[1] * f * 0.8, c[2] * f * 0.5]);
+        }
+      }
       if (p.size > 1) {
         // bigger flashes: little star around the center
         const s = p.size > 2 ? 2 : 1;
@@ -235,11 +249,60 @@ export class Renderer {
   }
 }
 
+// a flame tongue: a column of symbols, white-yellow at the root → orange → red tip, width by distance
+const FL_CH = ['@', '#', '*', '*', '^', '^', '!', "'", "'"];
+function drawFlame(scr, depth, cols, rows, cx, cy, dist, p, tanY) {
+  const perUnit = rows / (2 * tanY * dist);           // screen cells per world unit at this distance
+  const h = Math.max(1, Math.round(p.flame * perUnit));
+  const w = Math.max(1, Math.round(p.fw * perUnit));
+  const a = p.life, fog = Math.exp(-dist * 0.03);
+  for (let k = 0; k < h; k++) {
+    const yy = cy - k;
+    if (yy < 0) break;
+    const f = k / h;                                    // 0 root … 1 tip
+    const ww = Math.max(1, Math.round(w * (1 - f * 0.8)));
+    const sway = Math.round(Math.sin(p.seed + f * 3 + p.t * 9) * f * w * 0.6);
+    for (let j = 0; j < ww; j++) {
+      const xx = cx + sway + j - (ww >> 1);
+      if (xx < 0 || xx >= cols) continue;
+      if (depth[yy * cols + xx] < dist - 0.25) continue;
+      const hot = 1 - f;
+      const r = 255, g = 70 + hot * 175 * (p.hot * 0.4 + 0.6), b2 = 20 + Math.max(0, hot - 0.6) * 300;
+      const k2 = Math.min(1.15, a * 1.5) * (0.6 + fog * 0.4) * (0.7 + hot * 0.45);
+      scr.put(xx, yy, FL_CH[Math.min(FL_CH.length - 1, Math.floor(f * FL_CH.length + (j === 0 || j === ww - 1 ? 2 : 0)))], [r * k2, g * k2, Math.min(255, b2) * k2]);
+    }
+  }
+}
+
 // ── the per-cell ray tracer: rows y0..y1 of the screen; writes into band buffers
 //    (index = cell - base). Runs on the main thread or inside render workers.
 export function traceRows(C, y0, y1, base, A, B, depth, vmId) {
-  const { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, ox, oy, oz, fx, fy, fz, rx, ry, rz, ux, uy, uz,
+  const { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, gFire, fires, time, ox, oy, oz, fx, fy, fz, rx, ry, rz, ux, uy, uz,
     tanX, tanY, vmTanX, vmTanY, flash, players, rects, vm, vx0, vx1, vy0, vy1, decals } = C;
+  const nf = fires ? fires.length : 0, tStep = Math.floor((time || 0) * 14);
+  const { dark, zones } = C;
+  const nl = dark ? dark.length : 0;
+  // BLACKOUT: how much light reaches a point (spot lights = flashlights, point lights = shots / fire)
+  const lightAt = (x, y, z, nx, ny, nz) => {
+    let L = 0.06;
+    for (let i = 0; i < nl; i++) {
+      const l = dark[i];
+      let dx = x - l[0], dy = y - l[1], dz = z - l[2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) + 1e-4;
+      if (d > l[7]) continue;
+      dx /= d; dy /= d; dz /= d;
+      let k = l[8] * (1 - d / l[7]);
+      if (l[6] > -1) {                                   // spot: inside the cone?
+        const c = dx * l[3] + dy * l[4] + dz * l[5];
+        if (c < l[6]) continue;
+        k *= Math.min(1, (c - l[6]) / (1 - l[6]) * 2.2);
+        k *= 1.6 / (1 + d * 0.12);
+      }
+      const ndl = -(dx * nx + dy * ny + dz * nz);
+      L += k * (0.35 + 0.65 * Math.max(0, ndl));
+    }
+    return L > 1.4 ? 1.4 : L;
+  };
   const np = players.length, nvm = vm.length;
   const scr = { setCell(i, gi, fr, fg, fb, br, bg, bb) {
     const j = i << 2; A[j] = fr; A[j + 1] = fg; A[j + 2] = fb; A[j + 3] = gi & 255; B[j] = br; B[j + 1] = bg; B[j + 2] = bb; B[j + 3] = gi >> 8;
@@ -264,7 +327,7 @@ for (let cy = y0; cy < y1; cy++) {
           if (tt > 0 && tt < best) { best = tt; bp = vm[k]; bk = k; bnx = HIT.nx; bny = HIT.ny; bnz = HIT.nz; blz = HIT.lz; }
         }
         if (bp) {
-          isVM = true; mat = bp.mat; vmId[idx] = bp.mat === M.ARM ? 100 : bk;
+          isVM = true; mat = bp.mat; vmId[idx] = bp.mat === M.ARM ? 100 : SAME_ID[bp.mat] || bk;   // parts of one material blend (no seams)
           const b = BASE[mat];
           const ndl = Math.max(0, bnx * VLX + bny * VLY + bnz * VLZ);
           const facing = Math.max(0, -(bnx * dxv + bny * dyv + bnz * dzv));
@@ -277,13 +340,17 @@ for (let cy = y0; cy < y1; cy++) {
           // rim
           lum += Math.pow(1 - facing, 3) * 0.12;
           col0 = b.c[0]; col1 = b.c[1]; col2 = b.c[2];
-          if (mat === M.CAN) {
+          if (mat === M.FLAME) {
+            const h = hash3(cx, cy, tStep);
+            glyph = gFire[(h * 4) | 0]; lum = 1.1; col0 = 255; col1 = 140 + h * 100; col2 = 40 + h * 40;
+          } else if (mat === M.CAN) {
             const hl = bp.sz;
             if (Math.abs(blz) > hl * 0.72) { col0 = 170; col1 = 172; col2 = 180; }
             else if (bp.tag === 1 && facing > 0.8 && Math.abs(blz) < hl * 0.32) { glyph = gSigma; col0 = 240; col1 = 210; col2 = 210; lum = 1; }
             else if (Math.abs(blz) < hl * 0.45) { col0 = 40; col1 = 10; col2 = 14; lum *= 0.9; }
           }
           depth[idx] = 0.3;
+          if (dark) lum *= 0.62;
         }
       }
 
@@ -312,6 +379,7 @@ for (let cy = y0; cy < y1; cy++) {
         if (mat === 0) {
           // ───── sky: black void, sparse stars, pale moon ─────
           depth[idx] = 1e9;
+          if (dark) { scr.setCell(idx, gSpace, 0, 0, 0, 1, 1, 2); continue; }
           const md = dx * LX + dy * LY + dz * LZ;
           if (md > 0.9975) {
             const k = (md - 0.9975) / 0.0025;
@@ -413,12 +481,55 @@ for (let cy = y0; cy < y1; cy++) {
             }
           } else if (mat === M.EYE) {
             if (owner.dead) { glyph = gX; col0 = 140; col1 = 30; col2 = 34; lum = 0.8; }
+            else if (owner.zombie) { col0 = 255; col1 = 60; col2 = 40; lum = 1.0; }
             else lum = 1.0;
           } else if (mat === M.ARM) {
             col0 = owner.tint[0]; col1 = owner.tint[1]; col2 = owner.tint[2];
             lum += Math.pow(1 - facing, 2.5) * 0.3;
           }
         }
+        // ── burning ground under a molotov fire ──
+        if (nf && ny > 0.5 && !owner) {
+          for (let fi = 0; fi < nf; fi++) {
+            const F = fires[fi];
+            if (Math.abs(hy - F[1]) > 0.08) continue;
+            const ddx = hx - F[0], ddz = hz - F[2], d = Math.sqrt(ddx * ddx + ddz * ddz) / F[3];
+            if (d >= 1.15) continue;
+            const h = hash3(Math.floor(hx * 6), Math.floor(hz * 6), tStep);
+            const heat = (1 - d * 0.75) * F[4] * (0.6 + h * 0.5);
+            if (d < 1) {
+              // glowing embers under the flames (darker than the tongues so they stand out)
+              col0 = 200; col1 = 50 + heat * 90; col2 = 16 + heat * 16;
+              lum = Math.max(lum * 0.6, 0.18 + heat * 0.42);
+              if (h > 0.62) glyph = gFire[(h * 6) | 0];
+            } else { col0 = col0 * 0.5 + 60; col1 = col1 * 0.4; col2 = col2 * 0.3; lum *= 0.6; glyph = gWound[3]; }   // scorched rim
+            break;
+          }
+        }
+        // ── players on fire: flames licking over the ball ──
+        if (owner && owner.burn && (mat === M.BODY || mat === M.ARM)) {
+          const h = hash3(Math.floor(hx * 9), Math.floor(hy * 7) - tStep, Math.floor(hz * 9));
+          const up = Math.max(0, ny);
+          if (h > 0.62 - up * 0.3) {
+            glyph = gFire[(h * 5) | 0];
+            col0 = 255; col1 = 110 + h * 130; col2 = 30 + h * 40; lum = Math.max(lum, 0.7 + h * 0.4);
+          } else { col0 = col0 * 0.6 + 70; col1 = col1 * 0.55 + 20; col2 *= 0.5; }
+        }
+        // ── CAPTURE: team bases painted on the floor ──
+        if (zones && ny > 0.5 && hy < 0.05) {
+          for (const Z of zones) {
+            const d = Math.hypot(hx - Z[0], hz - Z[1]);
+            if (d > Z[2]) continue;
+            const ring = d > Z[2] - 0.18;
+            col0 = col0 * 0.35 + Z[3] * 0.65; col1 = col1 * 0.35 + Z[4] * 0.65; col2 = col2 * 0.35 + Z[5] * 0.65;
+            lum = ring ? Math.max(lum, 0.85) : lum * 0.9 + 0.08;
+            if (ring) glyph = rampG[9]; else if (((Math.floor(hx * 3) + Math.floor(hz * 3)) & 3) === 0) glyph = gDot;
+            break;
+          }
+        }
+        if (dark) lum *= lightAt(hx, hy, hz, nx, ny, nz);
+        if (mat === M.FLAME) { const h = hash3(cx, cy, tStep); glyph = gFire[(h * 4) | 0]; col0 = 255; col1 = 150 + h * 90; col2 = 50; lum = 1.2; }
+        if (mat === M.SIGMA) { const h = hash3(cx, cy, tStep >> 1); lum = 0.85 + h * 0.35 + facing * 0.2; col0 = 255; col1 = 200 + h * 40; col2 = 80; if (h > 0.8) glyph = gSigma; }
         const fog = Math.exp(-t * 0.032);
         lum *= fog;
       }

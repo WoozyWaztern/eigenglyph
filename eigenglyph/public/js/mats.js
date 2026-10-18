@@ -3,6 +3,7 @@ export const M = {
   NONE: 0, CONCRETE: 1, DARK: 2, CRATE: 3, PILLAR: 4, PANEL: 5, BORDER: 6, METAL: 7, FLOOR: 8,
   BODY: 10, EYE: 11, ARM: 12, GUNMETAL: 13, WOOD: 14, BLADE: 15, CAN: 16, CAN_TOP: 17,
   SHELL: 18, GRIP: 19, BRASS: 20, DEADEYE: 21,
+  AKBLACK: 22, POLY: 23, BATWOOD: 24, GLASS: 25, RAG: 26, FLAME: 27, MEDWHITE: 28, MEDRED: 29, TAPE: 30, STEEL: 31, SIGMA: 32,
 };
 export const BASE = [];
 const set = (id, rgb, spec = 0) => { BASE[id] = { c: rgb, spec }; };
@@ -26,3 +27,14 @@ set(M.SHELL,    [150, 30, 30], 0.3);
 set(M.GRIP,     [44, 45, 50], 0.1);
 set(M.BRASS,    [170, 136, 64], 0.8);
 set(M.DEADEYE,  [40, 8, 10]);
+set(M.AKBLACK,  [86, 91, 104], 0.95);   // blackened steel of the dark AK
+set(M.POLY,     [64, 65, 74], 0.35);   // black polymer furniture
+set(M.BATWOOD,  [178, 132, 82], 0.3);
+set(M.GLASS,    [74, 118, 70], 1.0);
+set(M.RAG,      [176, 164, 140], 0);
+set(M.FLAME,    [255, 168, 60], 0);    // emissive, flickers
+set(M.MEDWHITE, [204, 206, 210], 0.35);
+set(M.MEDRED,   [190, 34, 42], 0.2);
+set(M.TAPE,     [30, 30, 34], 0.05);
+set(M.STEEL,    [150, 156, 168], 0.9);
+set(M.SIGMA,    [246, 200, 84], 1.0);   // the golden Σ of CAPTURE mode

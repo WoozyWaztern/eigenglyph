@@ -4,8 +4,9 @@
 // ─────────────────────────────────────────────────────────────
 import { makePrim, setRotYXZ, setDirZ, mul3, SPHERE, BOX, CAPSULE, CYL } from './prims.js';
 import { M } from './mats.js';
+import { placeItem } from './items.js';
 
-const POOL = Array.from({ length: 24 }, makePrim);
+const POOL = Array.from({ length: 40 }, makePrim);
 const R = new Float32Array(9), R2 = new Float32Array(9);
 
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -80,12 +81,12 @@ export class ViewModel {
       // ───────── SHOTGUN ─────────
       const a = sm(st.ads);
       const rl = st.reload >= 0 ? sm(Math.min(1, st.reloadBlend)) : 0;
-      let pos = lerp3([0.24, -0.25, 0.64], [0.0, -0.135, 0.62], a);
+      let pos = lerp3([0.3, -0.235, 0.56], [0.0, -0.135, 0.62], a);
       pos = lerp3(pos, [0.20, -0.22, 0.58], rl);
       pos[0] += ox; pos[1] += oy + st.recoil * 0.035; pos[2] += oz - st.recoil * 0.11;
-      const yaw = lerp(-0.07, 0, a) + rl * -0.35;
+      const yaw = lerp(-0.5, 0, a) + rl * -0.2;
       const pitch = -st.recoil * 0.38 + eq * 0.9 + rl * -0.1 + st.pump * 0.06;
-      const roll = lerp(0.04, 0, a) + rl * 0.55 + st.pump * 0.05;
+      const roll = lerp(0.12, 0, a) + rl * 0.55 + st.pump * 0.05;
       setRotYXZ(R, yaw, pitch, roll);
       const pumpOff = -st.pump * 0.12;
 
@@ -96,6 +97,8 @@ export class ViewModel {
       setRotYXZ(R2, 0, 0.55, 0);
       part(BOX, M.WOOD, pos, R, 0, -0.1, -0.1, 0.03, 0.075, 0.035, R2);          // pistol grip
       part(BOX, M.GUNMETAL, pos, R, 0, -0.07, 0.0, 0.006, 0.02, 0.04);           // trigger guard
+      setRotYXZ(R2, 0, 0.14, 0);
+      part(BOX, M.WOOD, pos, R, 0, -0.045, -0.27, 0.032, 0.048, 0.14, R2);       // stock
       part(SPHERE, M.BRASS, pos, R, 0, 0.062, 0.72, 0.011, 0, 0);                 // bead sight
 
       // right hand on the grip
@@ -145,6 +148,141 @@ export class ViewModel {
       hand(h[0], h[1], h[2], 0.072);
       arm(h[0], h[1], h[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
       this.muzzle = world(pos, R, 0, 0, 0.3);
+    }
+    else if (st.w === 3 || st.w === 4) {
+      // ───────── DARK AK-47 / PISTOL ─────────
+      const ak = st.w === 3;
+      const a = sm(st.ads);
+      const rel = st.reload, rl = rel >= 0 ? sm(Math.min(1, st.reloadBlend)) : 0;
+      let pos = ak ? lerp3([0.3, -0.2, 0.52], [0.0, -0.075, 0.6], a) : lerp3([0.16, -0.13, 0.44], [0.0, -0.075, 0.46], a);
+      pos = lerp3(pos, ak ? [0.14, -0.18, 0.58] : [0.08, -0.12, 0.4], rl);
+      const kick = st.recoil * (ak ? 0.5 : 1);
+      pos[0] += ox; pos[1] += oy + kick * 0.012; pos[2] += oz - kick * (ak ? 0.035 : 0.045);
+      const yaw = lerp(ak ? -0.62 : -0.3, 0, a) + rl * (ak ? -0.2 : -0.2);
+      const pitch = -kick * (ak ? 0.08 : 0.32) + eq * 0.9 - rl * 0.12;
+      const roll = lerp(ak ? 0.12 : 0.06, 0, a) + rl * (ak ? 0.5 : 0.7);
+      setRotYXZ(R, yaw, pitch, roll);
+      const offs = {};
+      // magazine out → new magazine in
+      let magY = 0;
+      if (rel >= 0) {
+        if (rel < 0.15) magY = 0;
+        else if (rel < 0.35) magY = -0.3 * sm((rel - 0.15) / 0.2);
+        else if (rel < 0.55) magY = null;
+        else if (rel < 0.8) magY = -0.3 * (1 - sm((rel - 0.55) / 0.25));
+      }
+      offs[3] = magY === null ? null : [0, magY, -magY * 0.15];
+      // bolt / slide goes back on every shot (and the AK bolt is pulled after a reload)
+      const pull = ak && rel > 0.82 ? Math.sin((rel - 0.82) / 0.18 * Math.PI) * 0.07 : 0;
+      offs[2] = [0, 0, -(st.recoil * (ak ? 0.05 : 0.055)) - pull];
+      const S = ak ? 1 : 1.4;          // the pistol is drawn a bit bigger so the hands don't swallow it
+      n = placeItem(POOL, n, out, st.w, pos, R, S, 1, offs);
+      if (ak) {
+        const rh = world(pos, R, 0.0, -0.088, -0.108);
+        hand(rh[0], rh[1], rh[2]);
+        arm(rh[0], rh[1], rh[2], 0.6 + ox * 0.5, -0.72 + oy * 0.5, 0.12);
+        let lh = world(pos, R, 0.0, -0.032, 0.28);
+        if (rel >= 0) {
+          const k = rel < 0.12 ? sm(rel / 0.12) : rel < 0.8 ? 1 : rel < 0.86 ? 1 - sm((rel - 0.8) / 0.06) : 0;
+          const mag = world(pos, R, 0.0, -0.15 + (magY || -0.3), 0.08);
+          const bolt = world(pos, R, 0.045, 0.01, 0.09);
+          lh = lerp3(lh, mag, k * rl);
+          if (rel > 0.84) lh = lerp3(lh, bolt, Math.sin((rel - 0.84) / 0.16 * Math.PI));
+        }
+        hand(lh[0], lh[1], lh[2]);
+        arm(lh[0], lh[1], lh[2], -0.05 + ox * 0.5, -0.9 + oy * 0.5, 0.28);
+        this.muzzle = world(pos, R, 0, 0.0, 0.56);
+      } else {
+        const rh = world(pos, R, 0.0, -0.085 * S, -0.06 * S);
+        hand(rh[0], rh[1], rh[2], 0.058);
+        arm(rh[0], rh[1], rh[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
+        let lh = world(pos, R, -0.05 * S, -0.1 * S, -0.035 * S);
+        if (rel >= 0) {
+          const k = rel < 0.2 ? sm(rel / 0.2) : rel < 0.75 ? 1 : 1 - sm((rel - 0.75) / 0.25);
+          lh = lerp3(lh, world(pos, R, -0.02, -0.28, -0.08), k);
+        }
+        hand(lh[0], lh[1], lh[2], 0.056);
+        arm(lh[0], lh[1], lh[2], -0.25 + ox * 0.5, -0.85 + oy * 0.5, 0.2);
+        this.muzzle = world(pos, R, 0, 0.027 * S, 0.14 * S);
+      }
+    }
+    else if (st.w === 5) {
+      // ───────── HUNTING KNIFE ─────────
+      const idle = [0.21, -0.21, 0.5], idleD = [-0.12, 0.5, 1];
+      let pos = idle, dir = idleD;
+      if (st.slash >= 0) {
+        const s = st.slash, side = st.slashSide;
+        const keysP = side > 0
+          ? [[0, idle], [0.25, [0.38, -0.02, 0.4]], [0.52, [-0.24, -0.28, 0.56]], [1, idle]]
+          : [[0, idle], [0.25, [-0.1, -0.04, 0.44]], [0.52, [0.42, -0.31, 0.55]], [1, idle]];
+        const keysD = side > 0
+          ? [[0, idleD], [0.25, [0.7, 0.85, 0.45]], [0.52, [-1, -0.4, 0.55]], [1, idleD]]
+          : [[0, idleD], [0.25, [-0.7, 0.75, 0.55]], [0.52, [1, -0.3, 0.55]], [1, idleD]];
+        pos = track(keysP, s); dir = track(keysD, s);
+      }
+      pos = [pos[0] + ox, pos[1] + oy, pos[2] + oz];
+      setDirZ(R, dir[0], dir[1] - eq * 1.2, dir[2]);
+      n = placeItem(POOL, n, out, 5, pos, R, 1);
+      const h = world(pos, R, 0, -0.004, -0.075);
+      hand(h[0], h[1], h[2], 0.074);
+      arm(h[0], h[1], h[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
+      this.muzzle = world(pos, R, 0, 0, 0.33);
+    }
+    else if (st.w === 6) {
+      // ───────── BASEBALL BAT ─────────  (grip point + direction of the bat)
+      const gI = [0.27, -0.3, 0.44], dI = [-0.32, 1, 0.12];
+      let g = gI, d = dI;
+      if (st.slash >= 0) {
+        const s = st.slash, side = st.slashSide;
+        const sx = side > 0 ? 1 : -1;
+        g = track([[0, gI], [0.22, [0.34 * sx, -0.17, 0.38]], [0.46, [0.06 * sx, -0.24, 0.44]], [0.62, [-0.3 * sx, -0.3, 0.4]], [1, gI]], s);
+        d = track([[0, dI], [0.22, [0.55 * sx, 0.8, -0.25]], [0.46, [-1 * sx, 0.16, 0.38]], [0.62, [-0.6 * sx, -0.3, -0.5]], [1, dI]], s);
+      }
+      g = [g[0] + ox, g[1] + oy, g[2] + oz];
+      setDirZ(R, d[0], d[1] - eq * 1.4, d[2]);
+      const pos = world(g, R, 0, 0, 0.24);
+      n = placeItem(POOL, n, out, 6, pos, R, 1.15);
+      const rh = world(pos, R, 0, 0, -0.22), lh = world(pos, R, 0, 0, -0.29);
+      hand(rh[0], rh[1], rh[2], 0.07); hand(lh[0], lh[1], lh[2], 0.07);
+      arm(rh[0], rh[1], rh[2], 0.55 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
+      arm(lh[0], lh[1], lh[2], 0.05 + ox * 0.5, -0.85 + oy * 0.5, 0.2);
+      this.muzzle = world(pos, R, 0, 0, 0.45);
+    }
+    else if (st.w === 7) {
+      // ───────── MOLOTOV ─────────  (model axis z = up along the bottle)
+      const pI = [0.21, -0.21, 0.54], aI = [0.15, 1, 0.12];
+      let pos = pI, axis = aI, show = st.has, rise = 0;
+      const th = st.throwT;
+      if (th >= 0) {
+        pos = track([[0, pI], [0.35, [0.34, -0.03, 0.44]], [0.48, [0.04, -0.03, 0.8]], [0.7, [0.22, -0.34, 0.5]], [1, pI]], th);
+        axis = track([[0, aI], [0.35, [0.3, 0.5, -1]], [0.48, [0, 0.25, 1]], [0.7, aI], [1, aI]], th);
+        if (th > 0.46) { show = st.has && th > 0.72; rise = th > 0.72 ? (1 - sm((th - 0.72) / 0.28)) * 0.3 : 0; }
+        else show = true;
+      }
+      pos = [pos[0] + ox, pos[1] + oy - rise, pos[2] + oz];
+      setDirZ(R, axis[0], axis[1] - eq * 1.5, axis[2]);
+      if (show) n = placeItem(POOL, n, out, 7, pos, R, 1.05);
+      const h = show ? world(pos, R, 0.047, -0.01, -0.02) : [pos[0] + 0.03, pos[1] - 0.04, pos[2]];
+      hand(h[0], h[1], h[2], 0.066);
+      arm(h[0], h[1], h[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
+      this.muzzle = world(pos, R, 0, 0, 0.2);
+    }
+    else if (st.w === 8) {
+      // ───────── MEDKIT ─────────
+      let pos = [0.09, -0.175, 0.43], sp = 0, tilt = 0.3;
+      if (st.use >= 0) {
+        const u = st.use;
+        pos = track([[0, pos], [0.3, [0.0, -0.1, 0.36]], [0.7, [0.0, -0.11, 0.35]], [1, pos]], u);
+        sp = u > 0.3 && u < 0.7 ? Math.sin(u * 60) * 0.04 : 0;
+        tilt = 0.3 + (u > 0.25 && u < 0.75 ? 0.35 : 0);
+      }
+      pos = [pos[0] + ox, pos[1] + oy, pos[2] + oz];
+      setRotYXZ(R, Math.PI + 0.3 + sp, tilt + eq * 1.2, sp);
+      n = placeItem(POOL, n, out, 8, pos, R, 1);
+      const h = world(pos, R, -0.108, 0.0, 0.0);
+      hand(h[0], h[1], h[2], 0.066);
+      arm(h[0], h[1], h[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
+      this.muzzle = world(pos, R, 0, 0, 0.05);
     }
     else {
       // ───────── SODA ─────────

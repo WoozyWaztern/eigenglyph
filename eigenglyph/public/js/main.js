@@ -32,6 +32,7 @@ class App {
     this.game = new Game(this);
     this.lobby = new Lobby(this);
     this.profile = null;
+    this.isDev = false; this.devOpen = false; this.devLog = []; this.devInput = ''; this.devHist = []; this.devHi = -1; this.devFlags = null;
 
     this.state = 'login';
     this.nick = localStorage.getItem('eg_nick') || '';
@@ -77,6 +78,7 @@ class App {
           this.creds = this.creds || { name: this.nick, pass: this.pass };
           this.nick = m.name; localStorage.setItem('eg_nick', m.name);
           if (m.stats) this.profile = m.stats;
+          this.isDev = !!m.dev;
           this.lan = m.lan || [];
           this.net.send({ t: 'social' });
           if (this.state === 'login') this.ui.focus = null;
@@ -88,6 +90,8 @@ class App {
         }
         break;
       case 'online': this.online = m.n; break;
+      case 'devlog': this.devLog.push({ text: m.text, ok: m.ok !== false }); if (this.devLog.length > 200) this.devLog.shift(); break;
+      case 'devset': this.devFlags = m.dev; this.game.onNet(m); break;
       case 'profile': this.profile = m.stats; break;
       case 'social': this.social = m; break;
       case 'searchRes': this.searchRes = m; break;
@@ -118,9 +122,49 @@ class App {
     this.net.send({ t: 'auth', name, pass });
   }
   logout() {
+    this.isDev = false; this.devOpen = false; this.devLog = []; this.devFlags = null;
     this.creds = null; this.pass = ''; this.state = 'login'; this.ui.focus = 'pass';
     this.net.ws && this.net.ws.close();
   }
+  // ── F9: developer panel (only the account WoozyWaztern — the server checks it too) ──
+  devPanel() {
+    const inp = this.input, scr = this.scr;
+    if (inp.pressed.has('F9') && this.isDev && this.state !== 'login') {
+      this.devOpen = !this.devOpen; this.ui.focus = null;
+      if (this.devOpen && !this.devLog.length) { this.devLog.push({ text: 'developer panel · type a command and press Enter', ok: true }); this.net.send({ t: 'dev', cmd: 'help' }); }
+      inp.typed.length = 0;
+    }
+    if (!this.devOpen) return;
+    if (!this.isDev || this.state === 'login') { this.devOpen = false; return; }
+    for (const ch of inp.typed) {
+      if (ch === '\b') this.devInput = [...this.devInput].slice(0, -1).join('');
+      else if (ch === '\n') {
+        const cmd = this.devInput.trim();
+        this.devInput = ''; this.devHi = -1;
+        if (!cmd) continue;
+        this.devHist.unshift(cmd); this.devHist = this.devHist.slice(0, 30);
+        this.devLog.push({ text: '> ' + cmd, ok: true, me: true });
+        if (cmd === 'clear') this.devLog = [];
+        else this.net.send({ t: 'dev', cmd });
+      } else if (ch !== '\t' && ch !== '`' && this.devInput.length < 80) this.devInput += ch;
+    }
+    inp.typed.length = 0;
+    if (inp.pressed.has('ArrowUp') && this.devHist.length) { this.devHi = Math.min(this.devHist.length - 1, this.devHi + 1); this.devInput = this.devHist[this.devHi]; }
+    if (inp.pressed.has('ArrowDown')) { this.devHi = Math.max(-1, this.devHi - 1); this.devInput = this.devHi >= 0 ? this.devHist[this.devHi] : ''; }
+    // draw
+    const w = Math.min(84, scr.cols - 4), h = Math.min(scr.rows - 8, 40);
+    const x = scr.cols - w - 2, y = 4;
+    const bg = [12, 10, 6];
+    scr.box(x, y, w, h, [230, 170, 70], bg);
+    scr.text(x + 2, y, ' DEVELOPER PANEL · F9 · only WoozyWaztern ', [255, 210, 120], bg);
+    const lines = this.devLog.slice(-(h - 5));
+    lines.forEach((l, i) => scr.text(x + 2, y + 1 + i, l.text.slice(0, w - 4), l.me ? [255, 220, 150] : l.ok ? [200, 205, 210] : [230, 100, 90], bg));
+    for (let i = x + 1; i < x + w - 1; i++) scr.put(i, y + h - 3, '-', [90, 70, 40], bg);
+    const n = scr.text(x + 2, y + h - 2, '> ' + this.devInput, [255, 230, 170], bg);
+    if (this.time % 1 < 0.55) scr.put(x + 2 + n, y + h - 2, '_', [255, 230, 170], bg);
+    scr.text(x + w - 30, y + h - 1, ' Enter · ↑ history · F9 close ', [150, 120, 70], bg);
+  }
+
   play(mode = 'dm') {
     this.net.send({ t: 'join', mode });
     this.input.lock();
@@ -140,6 +184,7 @@ class App {
     this.ui.begin(dt);
     scr.clear(0, 0, 0, false);            // UI layer: see-through until drawn on
     scr.art.clear(0, 0, 0, false);        // art layer: only where something is painted
+    if (this.devOpen) this.ui.focus = null;
     if (this.state === 'game' && this.game.active) {
       this.game.update(dt);
       this.game.draw(dt);
@@ -147,6 +192,7 @@ class App {
       if (this.state === 'login') { scr.fine.clear(...C.bg); this.drawBackground(); this.drawLogin(); }
       else this.lobby.draw(dt);
     }
+    this.devPanel();
     this.ui.cursor();
     this.ui.end();
     scr.present();
@@ -283,7 +329,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'Eigenyth v1.1 · everything here is a character';
+    const r = 'Eigenyth v1.2 · shop update · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }

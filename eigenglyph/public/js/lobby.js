@@ -5,6 +5,10 @@
 import { C } from './ui.js';
 import { makePrim, hitPrim, HIT, SPHERE } from './prims.js';
 import { paintArt, emblemPainter } from './art.js';
+import { drawItemIcon } from './items.js';
+import { ITEMS, CATS, ITEM_IDX, ownedItems, itemStats, loadoutOf } from '../../shared/world.js';
+
+const TAB_SHOP = 3, TAB_INV = 4, TAB_PROFILE = 5;
 
 // ── RANKS ── each one has its own symbol, color and emblem.
 // The final rank EIGEN (λ — an eigenvalue) is made of ALL the others.
@@ -157,15 +161,18 @@ const GOLD = [236, 196, 92];
 const ONLINE = [110, 200, 130];
 
 export const MODES = [
-  { id: 'dm', name: 'DEATHMATCH', ru: 'обычный', time: '5:00', players: '2-8', ready: true,
-    icon: [' \\  |  / ', ' --( )-- ', ' /  |  \\ '],
+  { id: 'dm', name: 'DEATHMATCH', ru: 'обычный', time: '5:00', players: '2-8 pl', ready: true,
+    icon: [' \  |  / ', ' --( )-- ', ' /  |  \ '],
     desc: ['every player for himself.', 'most kills in 5 minutes', 'wins the round.'] },
-  { id: 'cap', name: 'CAPTURE Σ', ru: 'захват', time: '6:00', players: '2v2-4v4', ready: false,
+  { id: 'cap', name: 'CAPTURE Σ', ru: 'захват', time: '6:00', players: '2 teams', ready: true,
     icon: ['   |>Σ   ', '   |     ', '  _|_    '],
-    desc: ['grab the Σ in the center', 'and carry it to your base.', 'carrier glows and is slow.'] },
-  { id: 'dark', name: 'BLACKOUT', ru: 'тьма', time: '5:00', players: '2-8', ready: false,
+    desc: ['grab the Σ in the center', 'and carry it to your base.', 'carrier is slow · first to 3.'] },
+  { id: 'dark', name: 'BLACKOUT', ru: 'тьма', time: '5:00', players: '2-8 pl', ready: true,
     icon: ['  .   .  ', '    *    ', '  .   .  '],
-    desc: ['total darkness. only shots', 'and flashlights give light.', 'every flash shows you.'] },
+    desc: ['total darkness. only shots', 'and flashlights give light.', 'F = your flashlight.'] },
+  { id: 'zombie', name: 'ZOMBIES', ru: 'зомби', time: 'endless', players: 'solo', ready: true,
+    icon: ['  (x x)  ', '  /|=|\\  ', ' _/   \\_ '],
+    desc: ['hold off waves of zombies.', 'each wave: more and faster.', '+1★ a zombie · wave bonus.'] },
 ];
 
 export class Lobby {
@@ -192,15 +199,16 @@ export class Lobby {
     for (let x = 0; x < cols; x++) scr.put(x, 2, '-', C.line, C.panel);
     scr.text(2, 1, 'EIGENYTH', C.bright, C.panel);
     scr.text(12, 1, '· season 0 · the first glyph', C.line, C.panel);
-    const tabs = ['PLAY', 'FRIENDS', 'RANKS', 'PROFILE'];
-    let tx = Math.floor(cols / 2 - 22);
+    const tabs = ['PLAY', 'FRIENDS', 'RANKS', 'SHOP', 'INVENTORY', 'PROFILE'];
+    let tx = Math.floor(cols / 2 - (tabs.reduce((a, n) => a + n.length + 6, 0) + 1) / 2);
     const reqs = (app.social && app.social.requests || []).length;
     tabs.forEach((name, i) => {
       const w = name.length + 4, on = this.tab === i;
       const hov = ui.over(tx, 0, w, 3);
       if (hov) ui.hot = 'tab' + i;
-      if (hov && app.input.mouseClicked[0]) { this.tab = i; if (i === 3) this.viewing = null; app.audio.uiClick(); }
+      if (hov && app.input.mouseClicked[0]) { this.tab = i; if (i === TAB_PROFILE) this.viewing = null; this.popup = null; app.audio.uiClick(); }
       scr.text(tx + 2, 1, name, on ? C.bright : hov ? C.text : C.dim, C.panel);
+      if (name === 'SHOP') scr.put(tx + 1, 1, '★', on || hov ? GOLD : GOLD.map(v => v * 0.6), C.panel);
       if (on) for (let k = 0; k < w; k++) scr.put(tx + k, 2, '=', C.bright, C.panel);
       // red notification badge in the top-right corner of PROFILE
       if (name === 'PROFILE' && reqs > 0) {
@@ -224,10 +232,17 @@ export class Lobby {
     this.pollT = (this.pollT || 0) - dt;
     if (this.pollT <= 0 && app.net.status === 'online') { this.pollT = 4; app.net.send({ t: 'social' }); }
 
+    // while an item popup is open, clicks belong to the popup only
+    const popOpen = this.popup !== null && this.popup !== undefined;
+    const click = app.input.mouseClicked[0];
+    if (popOpen) app.input.mouseClicked[0] = false;
     if (this.tab === 0) this.drawPlay(dt);
     else if (this.tab === 1) this.drawFriends(dt);
     else if (this.tab === 2) this.drawRanks();
+    else if (this.tab === TAB_SHOP) this.drawShop(dt);
+    else if (this.tab === TAB_INV) this.drawInventory(dt);
     else this.drawProfile();
+    if (popOpen) { app.input.mouseClicked[0] = click; this.drawPopup(); }
 
     // ── footer ──
     const y = rows - 1;
@@ -243,7 +258,7 @@ export class Lobby {
     // keyboard shortcuts
     const inp = app.input;
     if (this.tab === 0 && !app.ui.focus) {
-      ['Digit1', 'Digit2', 'Digit3'].forEach((k, i) => { if (inp.pressed.has(k)) { this.mode = i; app.audio.uiClick(); } });
+      ['Digit1', 'Digit2', 'Digit3', 'Digit4'].forEach((k, i) => { if (inp.pressed.has(k)) { this.mode = i; app.audio.uiClick(); } });
       if (inp.pressed.has('Enter')) this.tryPlay();
     }
   }
@@ -343,7 +358,7 @@ export class Lobby {
     const rx = cols - rightW - 2;
     scr.text(rx, top, 'SELECT MODE', C.dim);
     let my = top + 1;
-    const cardH = 8;
+    const cardH = Math.max(6, Math.min(8, Math.floor((bottom - top - 12) / MODES.length) - 1));
     MODES.forEach((m, i) => {
       const on = this.mode === i;
       const hov = ui.over(rx, my, rightW, cardH);
@@ -356,9 +371,9 @@ export class Lobby {
       m.icon.forEach((l, k) => scr.text(rx + 2, my + 2 + k, l, on ? C.bright : C.dim, bg));
       scr.text(rx + 13, my + 1, m.name, on ? C.bright : C.text, bg);
       scr.text(rx + 14 + [...m.name].length, my + 1, `· ${m.ru}`, C.dim, bg);
-      m.desc.forEach((l, k) => scr.text(rx + 13, my + 2 + k, l, C.dim, bg));
-      scr.text(rx + 13, my + 6, `time ${m.time}  ·  ${m.players} pl`, on ? C.text : C.line, bg);
-      if (!m.ready) scr.text(rx + rightW - 8, my + 6, ' SOON ', [200, 120, 90], [40, 20, 16]);
+      m.desc.forEach((l, k) => scr.text(rx + 13, my + 2 + k, l.slice(0, rightW - 14), C.dim, bg));
+      scr.text(rx + 13, my + cardH - 2, `time ${m.time}  ·  ${m.players}`, on ? C.text : C.line, bg);
+      if (!m.ready) scr.text(rx + rightW - 8, my + cardH - 2, ' SOON ', [200, 120, 90], [40, 20, 16]);
       if (on) scr.put(rx - 1, my + cardH / 2, '>', C.bright);
       my += cardH + 1;
     });
@@ -368,7 +383,7 @@ export class Lobby {
     const by = Math.min(my + 1, bottom - 6);
     const pulse = 0.6 + 0.4 * Math.sin(app.time * 3);
     if (ui.button('play', rx, by, rightW, `P L A Y  ·  ${m.name}`, { h: 5, fg: C.bright, border: [200 * pulse + 40, 204 * pulse + 40, 212 * pulse + 40] })) this.tryPlay();
-    scr.textC(by + 6, 'ranked · RP changes after every match', C.line, null, rx + rightW / 2);
+    scr.textC(by + 6, m.id === 'zombie' ? 'solo · stars for every zombie and wave' : 'ranked · RP changes after every match', C.line, null, rx + rightW / 2);
   }
 
   // symbol rain + platform + character + orbiting aura of your rank symbol
@@ -473,6 +488,278 @@ export class Lobby {
       }
     }
     drawAura(true);
+  }
+
+
+  // ═════════════════════════ SHOP · INVENTORY ═════════════════════════
+  get inv() { return this.profile.inv || []; }
+  owns(idx, inv = this.inv) { const it = ITEMS[idx]; return it.starter || inv.includes(it.id); }
+
+  // a department list on the left (ALL + every category); returns the chosen category id
+  drawCats(key, x, y, w, counts, label) {
+    const app = this.app, scr = app.scr, ui = app.ui;
+    if (this[key] === undefined) this[key] = 'all';
+    scr.text(x, y, label, C.dim);
+    y += 1;
+    const list = [{ id: 'all', name: 'ALL ITEMS', ru: 'все', g: '◦' }, ...CATS];
+    for (const c of list) {
+      const on = this[key] === c.id, hov = ui.over(x, y, w, 3);
+      if (hov) ui.hot = key + c.id;
+      if (hov && app.input.mouseClicked[0]) { this[key] = c.id; app.audio.uiClick(); }
+      const bg = on ? [26, 28, 32] : C.panel;
+      scr.box(x, y, w, 3, on ? C.bright : hov ? C.dim : C.line, bg);
+      scr.put(x + 2, y + 1, c.g, on ? GOLD : C.dim, bg);
+      scr.text(x + 4, y + 1, c.name, on ? C.bright : hov ? C.text : C.dim, bg);
+      const n = String(counts[c.id] || 0);
+      scr.text(x + w - 2 - n.length, y + 1, n, on ? C.text : C.line, bg);
+      if (w - 8 - c.name.length - n.length > c.ru.length) scr.text(x + 5 + c.name.length, y + 1, c.ru, C.line, bg);
+      if (on) scr.put(x + w, y + 1, '>', C.bright);
+      y += 3;
+    }
+    return y;
+  }
+
+  // a card: the 3D item drawn with lots of tiny symbols, name, and a price / tag line
+  drawItemCard(id, x, y, w, h, idx, sub, subCol, selected) {
+    const app = this.app, scr = app.scr, ui = app.ui, it = ITEMS[idx];
+    const hov = ui.over(x, y, w, h);
+    if (hov) ui.hot = id;
+    const bg = selected ? [26, 28, 32] : hov ? [21, 22, 26] : [13, 14, 17];
+    scr.box(x, y, w, h, selected ? C.bright : hov ? C.dim : C.line, bg);
+    const ih = h - 4;
+    scr.hole(x + 1, y + 1, w - 2, ih);
+    const A = scr.ART;
+    drawItemIcon(scr.art, (x + 1) * A, (y + 1) * A, (w - 2) * A, ih * A, idx, app.time, selected || hov, bg);
+    scr.fill(x + 1, y + h - 3, w - 2, 2, ' ', null, bg);
+    scr.textC(y + h - 3, it.name, selected ? C.bright : C.text, bg, x + w / 2);
+    if (sub) {
+      const n = [...sub].length, sx = Math.floor(x + w / 2 - n / 2);
+      scr.text(sx, y + h - 2, sub, subCol || C.dim, bg);
+      if (sub[0] === '★') scr.put(sx, y + h - 2, '★', GOLD, bg);
+    }
+    const cat = CATS.find(c => c.id === it.cat);
+    scr.text(x + 2, y, ` ${cat.g} `, C.dim, bg);
+    return hov && app.input.mouseClicked[0];
+  }
+
+  // full description of an item: big icon, text, stat bars; `action(y)` draws the bottom part
+  drawItemDetail(x, y, w, h, idx, action) {
+    const app = this.app, scr = app.scr, it = ITEMS[idx], cat = CATS.find(c => c.id === it.cat);
+    scr.box(x, y, w, h, C.line, C.panel);
+    scr.text(x + 2, y, ` ${cat.name} · ${cat.ru} `, C.dim, C.panel);
+    const ih = Math.max(8, Math.min(16, h - 26));
+    const bg = [12, 13, 16];
+    scr.box(x + 2, y + 2, w - 4, ih + 2, C.line, bg, true);
+    scr.hole(x + 3, y + 3, w - 6, ih);
+    const A = scr.ART;
+    drawItemIcon(scr.art, (x + 3) * A, (y + 3) * A, (w - 6) * A, ih * A, idx, app.time, true, bg);
+    let yy = y + ih + 5;
+    scr.text(x + 3, yy, it.name, C.bright, C.panel);
+    if (it.starter) scr.text(x + w - 12, yy, 'STARTER', C.dim, C.panel);
+    yy += 2;
+    for (const l of it.desc) { scr.text(x + 3, yy, l, C.text, C.panel); yy++; }
+    yy += 1;
+    const bw = Math.max(8, w - 34);
+    for (const [label, , f, txt] of itemStats(it.id)) {
+      scr.text(x + 3, yy, label, C.dim, C.panel);
+      const n = Math.round(Math.max(0, Math.min(1, f)) * bw);
+      for (let i = 0; i < bw; i++) scr.put(x + 15 + i, yy, i < n ? '#' : '.', i < n ? C.text : C.line, C.panel);
+      scr.text(x + 16 + bw, yy, txt, C.dim, C.panel);
+      yy++;
+    }
+    yy += 1;
+    for (let i = x + 2; i < x + w - 2; i++) scr.put(i, yy, '-', C.line, C.panel);
+    if (action) action(yy + 1);
+  }
+
+  // ───────── SHOP tab ─────────
+  drawShop(dt) {
+    const app = this.app, scr = app.scr, ui = app.ui;
+    const cols = scr.cols, rows = scr.rows, top = 4, bottom = rows - 2;
+    const stars = this.profile.stars || 0;
+    const forSale = ITEMS.map((it, i) => i).filter(i => !ITEMS[i].starter);
+    const counts = { all: forSale.length };
+    for (const i of forSale) counts[ITEMS[i].cat] = (counts[ITEMS[i].cat] || 0) + 1;
+    const lw = 28;
+    let y = this.drawCats('shopCat', 2, top, lw, counts, 'DEPARTMENTS · отделы');
+    // wallet
+    y += 1;
+    scr.box(2, y, lw, 7, GOLD.map(v => v * 0.5), C.panel);
+    scr.text(4, y, ' WALLET ', C.dim, C.panel);
+    scr.put(4, y + 2, '★', GOLD, C.panel);
+    scr.text(6, y + 2, `${stars} stars`, C.bright, C.panel);
+    scr.text(4, y + 4, 'kill +5 · top 3 +20', C.line, C.panel);
+    scr.text(4, y + 5, 'win +50 · match +10', C.line, C.panel);
+
+    // right: item details
+    const rw = Math.min(56, Math.floor(cols * 0.3)), rx = cols - rw - 2;
+    const mx = 2 + lw + 3, mw = rx - mx - 2;
+    const list = forSale.filter(i => this.shopCat === 'all' || ITEMS[i].cat === this.shopCat);
+    if (this.shopSel === undefined || !list.includes(this.shopSel)) this.shopSel = list[0];
+    // middle: cards
+    scr.text(mx, top, 'S H O P', C.bright);
+    scr.text(mx + 9, top, '· buy weapons for ★ stars · bought items stay forever', C.dim);
+    const cw = Math.max(26, Math.min(40, Math.floor((mw - 2) / 3) - 2)), ch = 15;
+    const per = Math.max(1, Math.floor((mw + 2) / (cw + 2)));
+    list.forEach((idx, k) => {
+      const x = mx + (k % per) * (cw + 2), yy = top + 2 + Math.floor(k / per) * (ch + 1);
+      if (yy + ch > bottom) return;
+      const it = ITEMS[idx], own = this.owns(idx);
+      const sub = own ? 'OWNED ✓' : `★ ${it.price}`;
+      const col = own ? ONLINE : stars >= it.price ? C.bright : [200, 110, 100];
+      if (this.drawItemCard('shop' + idx, x, yy, cw, ch, idx, sub, col, this.shopSel === idx)) { this.shopSel = idx; this.confirm = null; app.audio.uiClick(); }
+    });
+    if (!list.length) scr.text(mx, top + 3, 'nothing here yet — more items soon', C.line);
+    if (this.shopSel === undefined) return;
+    this.drawItemDetail(rx, top, rw, bottom - top, this.shopSel, yy => this.drawBuy(this.shopSel, rx, yy, rw, bottom));
+  }
+
+  drawBuy(idx, x, y, w, bottom) {
+    const app = this.app, scr = app.scr, ui = app.ui, it = ITEMS[idx];
+    const stars = this.profile.stars || 0, own = this.owns(idx);
+    scr.text(x + 3, y + 1, 'PRICE', C.dim, C.panel);
+    scr.put(x + 10, y + 1, '★', GOLD, C.panel);
+    scr.text(x + 12, y + 1, `${it.price}`, C.bright, C.panel);
+    scr.text(x + w - 3 - `you have ★ ${stars}`.length, y + 1, `you have ★ ${stars}`, C.dim, C.panel);
+    const by = Math.min(y + 3, bottom - 4), bw = w - 6;
+    if (this.confirm && this.confirm.idx === idx && (this.confirm.t -= 1 / 60) <= 0) this.confirm = null;
+    if (own) {
+      scr.box(x + 3, by, bw, 3, ONLINE.map(v => v * 0.5), C.panel);
+      scr.textC(by + 1, 'OWNED ✓  ·  in your INVENTORY', ONLINE, C.panel, x + w / 2);
+    } else if (stars < it.price) {
+      scr.box(x + 3, by, bw, 3, C.line, C.panel);
+      scr.textC(by + 1, `need ${it.price - stars} more ★`, [200, 110, 100], C.panel, x + w / 2);
+    } else if (this.confirm && this.confirm.idx === idx) {
+      if (ui.button('buyok', x + 3, by, bw, `CONFIRM · spend ★ ${it.price}`, { fg: GOLD, border: GOLD })) {
+        app.net.send({ t: 'buy', id: it.id }); this.confirm = null;
+      }
+    } else if (ui.button('buy', x + 3, by, bw, `BUY  ·  ★ ${it.price}`, { fg: C.bright, border: C.dim })) {
+      this.confirm = { idx, t: 4 };
+    }
+    if (by + 4 < bottom) scr.textC(by + 4, own ? 'equip it in INVENTORY · max 4 items in a match' : 'bought items appear in INVENTORY', C.line, C.panel, x + w / 2);
+  }
+
+  // ───────── INVENTORY tab ─────────
+  get loadout() { return loadoutOf(this.profile); }
+  drawInventory(dt) {
+    const app = this.app, scr = app.scr, ui = app.ui;
+    const cols = scr.cols, rows = scr.rows, top = 4, bottom = rows - 2;
+    const owned = ownedItems(this.inv), lo = this.loadout;
+    const counts = { all: owned.length };
+    for (const i of owned) counts[ITEMS[i].cat] = (counts[ITEMS[i].cat] || 0) + 1;
+    const lw = 28;
+    this.drawCats('invCat', 2, top, lw, counts, 'DEPARTMENTS · отделы');
+    const rw = Math.min(56, Math.floor(cols * 0.3)), rx = cols - rw - 2;
+    const mx = 2 + lw + 3, mw = rx - mx - 2;
+    scr.text(mx, top, 'I N V E N T O R Y', C.bright);
+    scr.text(mx + 19, top, `· ${owned.length}/${ITEMS.length} items · click an item to see it`, C.dim);
+    if (this.invSel === undefined || !owned.includes(this.invSel)) this.invSel = lo.find(i => i >= 0) ?? owned[0];
+
+    // ── loadout: what you take into a match (max 4 — one per slot) ──
+    let y = top + 2;
+    scr.text(mx, y, 'LOADOUT', C.text);
+    scr.text(mx + 8, y, '· you take max 4 items into a match: one PRIMARY, SECONDARY, MELEE and UTILITY', C.dim);
+    y += 1;
+    const sw = Math.floor((mw + 2) / 4) - 2, sh = 8;
+    CATS.forEach((c, k) => {
+      const x = mx + k * (sw + 2), idx = lo[k];
+      const hov = ui.over(x, y, sw, sh);
+      if (hov) ui.hot = 'lo' + k;
+      const bg = idx >= 0 && this.invSel === idx ? [26, 28, 32] : hov ? [21, 22, 26] : [13, 14, 17];
+      scr.box(x, y, sw, sh, idx >= 0 ? GOLD.map(v => v * (hov ? 0.9 : 0.55)) : C.line, bg);
+      scr.text(x + 2, y, ` ${c.key} · ${c.name} `, idx >= 0 ? GOLD : C.dim, bg);
+      if (idx >= 0) {
+        scr.hole(x + 1, y + 1, sw - 2, sh - 3);
+        drawItemIcon(scr.art, (x + 1) * scr.ART, (y + 1) * scr.ART, (sw - 2) * scr.ART, (sh - 3) * scr.ART, idx, app.time, hov || this.invSel === idx, bg);
+        scr.fill(x + 1, y + sh - 2, sw - 2, 1, ' ', null, bg);
+        scr.textC(y + sh - 2, ITEMS[idx].name, C.bright, bg, x + sw / 2);
+        if (hov && app.input.mouseClicked[0]) { this.invSel = idx; app.audio.uiClick(); }
+      } else {
+        scr.textC(y + 3, 'empty', C.line, bg, x + sw / 2);
+        scr.textC(y + 4, c.id === 'secondary' ? 'buy a PISTOL in the SHOP' : 'pick an item below', C.line, bg, x + sw / 2);
+      }
+    });
+    y += sh + 1;
+
+    // ── everything you own, by department ──
+    const cats = CATS.filter(c => this.invCat === 'all' || c.id === this.invCat);
+    const cw = Math.floor((mw + 2) / cats.length) - 2;
+    const most = Math.max(1, ...cats.map(c => owned.filter(i => ITEMS[i].cat === c.id).length));
+    const avail = bottom - y - 2;
+    const per = cats.length === 1 ? Math.max(1, Math.floor((mw + 2) / 30)) : 1;
+    const cwi = cats.length === 1 ? Math.floor((mw + 2) / per) - 2 : cw;
+    const ch = Math.max(6, Math.min(12, Math.floor(avail / Math.ceil(most / per)) - 1));
+    cats.forEach((c, k) => {
+      const x0 = mx + k * (cw + 2);
+      const mine = owned.filter(i => ITEMS[i].cat === c.id);
+      scr.put(x0, y, c.g, GOLD);
+      scr.text(x0 + 2, y, `${c.name} · ${c.ru}`.slice(0, cw - 2), C.text);
+      if (!mine.length) { scr.text(x0 + 2, y + 1, 'empty — ★ SHOP', C.line); return; }
+      mine.forEach((idx, j) => {
+        const x = x0 + (j % per) * (cwi + 2), yy = y + 1 + Math.floor(j / per) * (ch + 1);
+        if (yy + ch > bottom) return;
+        const eq = lo.includes(idx);
+        if (this.drawItemCard('inv' + idx, x, yy, cwi, ch, idx, eq ? 'EQUIPPED ✓' : ITEMS[idx].starter ? 'starter' : 'bought', eq ? ONLINE : C.line, this.invSel === idx)) { this.invSel = idx; app.audio.uiClick(); }
+      });
+    });
+    if (this.invSel === undefined) return;
+    this.drawItemDetail(rx, top, rw, bottom - top, this.invSel, yy => {
+      const it = ITEMS[this.invSel], k = CATS.findIndex(c => c.id === it.cat), cat = CATS[k];
+      const by = Math.min(yy + 2, bottom - 4), bw = rw - 6;
+      if (lo[k] === this.invSel) {
+        scr.text(rx + 3, yy + 1, `EQUIPPED ✓  ·  ${cat.name} slot  ·  key ${cat.key} in a match`, ONLINE, C.panel);
+        if (ui.button('unequip', rx + 3, by + 1, bw, 'UNEQUIP', { fg: C.dim })) app.net.send({ t: 'unequip', cat: cat.id });
+      } else {
+        const cur = lo[k] >= 0 ? ITEMS[lo[k]].name : 'empty';
+        scr.text(rx + 3, yy + 1, `${cat.name} slot now: ${cur}`, C.dim, C.panel);
+        if (ui.button('equip', rx + 3, by + 1, bw, `EQUIP  ·  ${cat.name}`, { fg: C.bright, border: GOLD })) app.net.send({ t: 'equip', id: it.id });
+      }
+    });
+  }
+
+  // a small inventory overview (used on profiles — everyone can see it)
+  drawInvPanel(x, y, w, h, inv, title, loadout) {
+    const app = this.app, scr = app.scr, ui = app.ui;
+    const owned = ownedItems(inv), lo = loadoutOf({ inv, loadout });
+    scr.box(x, y, w, h, C.line, C.panel);
+    scr.text(x + 2, y, ` ${title} · ${owned.length} items `, C.dim, C.panel);
+    const colW = Math.floor((w - 4) / CATS.length);
+    const most = Math.max(1, ...CATS.map(c => owned.filter(i => ITEMS[i].cat === c.id).length));
+    const iw = Math.max(10, colW - 2), ih = Math.max(5, Math.min(10, Math.floor((h - 5) / most) - 1));
+    CATS.forEach((c, k) => {
+      const cx = x + 2 + k * colW;
+      scr.put(cx, y + 2, c.g, GOLD, C.panel);
+      scr.text(cx + 2, y + 2, c.name.slice(0, colW - 3), C.text, C.panel);
+      const mine = owned.filter(i => ITEMS[i].cat === c.id);
+      if (!mine.length) scr.text(cx + 2, y + 3, 'empty', C.line, C.panel);
+      mine.forEach((idx, j) => {
+        const yy = y + 4 + j * (ih + 1);
+        if (yy + ih > y + h - 1) return;
+        const hov = ui.over(cx, yy, iw, ih);
+        if (hov) ui.hot = title + idx;
+        const bg = hov ? [24, 26, 30] : [13, 14, 17];
+        scr.box(cx, yy, iw, ih, hov ? C.dim : C.line, bg);
+        scr.hole(cx + 1, yy + 1, iw - 2, ih - 3);
+        drawItemIcon(scr.art, (cx + 1) * scr.ART, (yy + 1) * scr.ART, (iw - 2) * scr.ART, (ih - 3) * scr.ART, idx, app.time, hov, bg);
+        scr.fill(cx + 1, yy + ih - 2, iw - 2, 1, ' ', null, bg);
+        const eq = lo.includes(idx);
+        scr.textC(yy + ih - 2, (eq ? '✓ ' : '') + ITEMS[idx].name.slice(0, iw - 4), eq ? ONLINE : hov ? C.bright : C.dim, bg, cx + iw / 2);
+        if (hov && app.input.mouseClicked[0]) { this.popup = idx; app.audio.uiClick(); }
+      });
+    });
+    return y + h;
+  }
+  // centered card with the item's stats (opened from a profile)
+  drawPopup() {
+    const app = this.app, scr = app.scr, ui = app.ui;
+    const w = Math.min(58, scr.cols - 4), h = Math.min(40, scr.rows - 6);
+    const x = Math.floor(scr.cols / 2 - w / 2), y = Math.floor(scr.rows / 2 - h / 2);
+    const inside = ui.over(x, y, w, h);
+    scr.dim(0, 3, scr.cols, scr.rows - 4, 0.45);
+    this.drawItemDetail(x, y, w, h, this.popup, yy => {
+      if (ui.button('popclose', x + 3, Math.min(yy + 2, y + h - 4), w - 6, 'CLOSE')) this.popup = null;
+    });
+    if (app.input.mouseClicked[0] && !inside) this.popup = null;
   }
 
   // ───────── RANKS tab ─────────
@@ -590,8 +877,8 @@ export class Lobby {
   // open another player's profile
   openProfile(name) {
     if (!name) return;
-    if (name.toLowerCase() === this.app.nick.toLowerCase()) { this.viewing = null; this.tab = 3; return; }
-    this.viewing = name; this.tab = 3;
+    if (name.toLowerCase() === this.app.nick.toLowerCase()) { this.viewing = null; this.tab = TAB_PROFILE; return; }
+    this.viewing = name; this.tab = TAB_PROFILE;
     this.app.net.send({ t: 'viewProfile', name });
   }
   drawProfileActions(V, rx, rw, top, bottom) {
@@ -678,15 +965,18 @@ export class Lobby {
       scr.text(lx + lw - 3 - rp.length, yy, rp, m.rp > 0 ? ONLINE : [200, 80, 80], C.panel);
     });
 
-    if (V) return this.drawProfileActions(V, rx, rw, top, bottom);
+    // ── right of the character: the player's inventory, visible to everyone ──
+    const invH = Math.min(30, Math.max(14, Math.floor((bottom - top) * 0.52)));
+    const ntop = this.drawInvPanel(rx, top, rw, invH, V ? (V.inv || []) : this.inv, V ? `${V.name.toUpperCase()}'S INVENTORY · ✓ = equipped` : 'INVENTORY · ✓ = equipped', V ? V.loadout : this.profile.loadout) + 1;
+    if (V) return this.drawProfileActions(V, rx, rw, ntop, bottom);
 
     // ── right: notifications (friend requests + news) ──
     const soc = app.social || { requests: [], notes: [] };
-    scr.box(rx, top, rw, bottom - top, C.line, C.panel);
+    scr.box(rx, ntop, rw, bottom - ntop, C.line, C.panel);
     const reqs = soc.requests || [];
-    scr.text(rx + 2, top, ' NOTIFICATIONS ', C.dim, C.panel);
-    if (reqs.length) scr.text(rx + 17, top, ` ${fmtBadge(reqs.length)} `, [255, 255, 255], [196, 38, 46]);
-    let ny = top + 2;
+    scr.text(rx + 2, ntop, ' NOTIFICATIONS ', C.dim, C.panel);
+    if (reqs.length) scr.text(rx + 17, ntop, ` ${fmtBadge(reqs.length)} `, [255, 255, 255], [196, 38, 46]);
+    let ny = ntop + 2;
     scr.text(rx + 3, ny, 'FRIEND REQUESTS', C.text, C.panel);
     ny += 1;
     if (!reqs.length) { scr.text(rx + 3, ny, 'no new requests', C.line, C.panel); ny += 1; }
