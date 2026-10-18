@@ -1341,7 +1341,7 @@ export class Game {
     if (this.mode === 'cap' && res.score) { const [a, b] = res.score; title = a === b ? `D R A W   ${a} : ${b}` : `${a > b ? 'RED' : 'BLUE'} WINS  ${a} : ${b}`; }
     scr.textC(y + 1, title, mine && mine.place === 1 ? [244, 214, 120] : C.bright, C.panel, x + w / 2);
     scr.text(x + 3, y + 3, '#   PLAYER', C.dim, C.panel);
-    scr.text(x + w - 24, y + 3, 'K    D    RP    ★', C.dim, C.panel);
+    scr.text(x + w - 24, y + 3, 'K    D   ELO    ★', C.dim, C.panel);
     for (let i = 1; i < w - 1; i++) scr.put(x + i, y + 4, '-', C.line, C.panel);
     list.forEach((r, i) => {
       const me = r.id === this.myId, c = me ? C.bright : C.text;
@@ -1353,7 +1353,7 @@ export class Game {
       scr.text(x + w - 14, yy, rp, r.rp > 0 ? [110, 190, 130] : r.rp < 0 ? [200, 80, 80] : C.dim, C.panel);
       if (r.stars) scr.text(x + w - 8, yy, `+${r.stars}`, [236, 196, 92], C.panel);
     });
-    const note = res.ranked ? 'each kill: +2 RP and +5 ★ · results saved to your profile' : 'need 2+ players for a ranked match';
+    const note = res.ranked ? 'each kill: +4 ELO and +5 ★ · results saved to your profile' : 'need 2+ players for a ranked match';
     scr.textC(y + h - 3, note, C.dim, C.panel, x + w / 2);
     scr.textC(y + h - 2, `next match in ${Math.max(0, Math.ceil(this.match.ends - this.time))}`, C.line, C.panel, x + w / 2);
   }

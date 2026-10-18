@@ -6,7 +6,7 @@ import { C } from './ui.js';
 import { makePrim, hitPrim, HIT, SPHERE } from './prims.js';
 import { paintArt, emblemPainter } from './art.js';
 import { drawItemIcon } from './items.js';
-import { ITEMS, CATS, ITEM_IDX, ownedItems, itemStats, loadoutOf } from '../../shared/world.js';
+import { ITEMS, CATS, ITEM_IDX, ownedItems, itemStats, loadoutOf, rankFromElo, rankStart, RANK_DIV } from '../../shared/world.js';
 
 const TAB_SHOP = 3, TAB_INV = 4, TAB_PROFILE = 5;
 
@@ -25,15 +25,14 @@ export const TIERS = [
 ];
 const FINAL = TIERS.length - 1;
 const ROMAN = ['I', 'II', 'III'];
-export const RP_PER_DIV = 100;
-
-export function rankOf(rp) {
-  const div = Math.floor(Math.max(0, rp) / RP_PER_DIV);
-  const tier = Math.min(FINAL, Math.floor(div / 3));
-  if (tier === FINAL) return { tier, div: 0, label: 'EIGEN', into: rp - FINAL * 3 * RP_PER_DIV, need: 0 };
-  const d = div % 3;
-  return { tier, div: d, label: `${TIERS[tier].name} ${ROMAN[d]}`, into: rp % RP_PER_DIV, need: RP_PER_DIV };
+// ELO → rank. Every rank (EIGEN too) has 3 divisions: I · II · III (table in shared/world.js)
+export function rankOf(elo) {
+  elo = Math.max(0, Math.floor(elo || 0));
+  const r = rankFromElo(elo);
+  return { tier: r.tier, div: r.div, label: `${TIERS[r.tier].name} ${ROMAN[r.div]}`,
+    into: elo - r.start, need: r.next ? r.next - r.start : 0, elo, next: r.next };
 }
+export const fmtElo = n => Math.floor(n || 0).toLocaleString('en-US').replace(/,/g, ' ');
 
 const art = s => s.split('\n').slice(1, -1);
 const EMBLEMS = [
@@ -147,13 +146,17 @@ export function drawEmblem(scr, cx, y, tier, k = 1, w = 20, h = 9, bg = C.panel)
 }
 
 // ★ stars currency: 999 → "999", 1000 → "1K+", 1150 → "1.1K+", 25000 → "25K+", 1.2M → "1.2M+"
+const STAR_UNITS = ['K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc', 'Ud', 'Dd', 'Td', 'Qad', 'Qid', 'Sxd', 'Spd', 'Ocd', 'Nod', 'Vg'];
 export function fmtStars(n) {
-  n = Math.max(0, Math.floor(n || 0));
+  n = Math.max(0, Math.floor(Number(n) || 0));
+  if (!Number.isFinite(n)) return '∞';
   if (n < 1000) return String(n);
-  const unit = n >= 1e9 ? [1e9, 'B'] : n >= 1e6 ? [1e6, 'M'] : [1e3, 'K'];
-  const v = n / unit[0];
+  if (n >= 1e100) { const e = Math.floor(Math.log10(n) + 1e-9), v = n / Math.pow(10, e); return e === 100 && v < 1.05 ? 'GOOGOL+' : `${Math.floor(v * 10) / 10}e${e}+`; }
+  const k = Math.min(STAR_UNITS.length, Math.floor(Math.log10(n) / 3 + 1e-9));
+  if (k > STAR_UNITS.length - 1 && n >= 1e66) { const e = Math.floor(Math.log10(n) + 1e-9); return `${Math.floor(n / Math.pow(10, e) * 10) / 10}e${e}+`; }
+  const v = n / Math.pow(10, k * 3);
   const txt = v < 10 ? (Math.floor(v * 10) / 10).toString() : Math.floor(v).toString();
-  return txt + unit[1] + '+';
+  return txt + STAR_UNITS[k - 1] + '+';
 }
 // red badge text: 1..999, then "+999"
 export function fmtBadge(n) { return n > 999 ? '+999' : String(n); }
@@ -243,6 +246,7 @@ export class Lobby {
     else if (this.tab === TAB_INV) this.drawInventory(dt);
     else this.drawProfile();
     if (popOpen) { app.input.mouseClicked[0] = click; this.drawPopup(); }
+    if (this.rankUp) this.drawRankUp(dt);
 
     // ── footer ──
     const y = rows - 1;
@@ -298,15 +302,16 @@ export class Lobby {
     y += drawEmblem(scr, lcx, y, r.tier, 1, 26, 11) + 1;
     scr.textC(y, r.label, tier.col, C.panel, lcx);
     // division pips
-    if (r.tier !== FINAL) scr.textC(y + 1, [0, 1, 2].map(i => i <= r.div ? '<#>' : '<.>').join(' '), tier.col, C.panel, lcx);
+    scr.textC(y + 1, [0, 1, 2].map(i => i <= r.div ? '<#>' : '<.>').join(' '), tier.col, C.panel, lcx);
     y += 3;
     const bw = leftW - 14;
+    const bw2 = leftW - 8;
     if (r.need) {
-      const f = Math.round(r.into / r.need * bw);
-      scr.text(5, y, 'RP', C.dim, C.panel);
-      for (let i = 0; i < bw; i++) scr.put(8 + i, y, i < f ? '#' : '.', i < f ? tier.col : C.line, C.panel);
-      scr.text(9 + bw, y, `${r.into}/${r.need}`, C.dim, C.panel);
-    } else scr.textC(y, `${p.rp} RP`, C.bright, C.panel, lcx);
+      const f = Math.round(r.into / r.need * bw2);
+      for (let i = 0; i < bw2; i++) scr.put(5 + i, y, i < f ? '#' : '.', i < f ? tier.col : C.line, C.panel);
+      scr.textC(y + 1, `ELO ${fmtElo(p.rp)}  ·  next at ${fmtElo(r.next)}`, C.dim, C.panel, lcx);
+    } else scr.textC(y, `ELO ${fmtElo(p.rp)} · max rank`, C.bright, C.panel, lcx);
+    y += 1;
     y += 2;
     // mini ladder: where you are on the path to EIGEN
     const lad = TIERS.map(t => t.g).join('  ');
@@ -334,7 +339,7 @@ export class Lobby {
         scr.text(5, y + 1 + i, `#${m.place}`, win ? C.bright : C.dim, C.panel);
         scr.text(10, y + 1 + i, m.mode, C.dim, C.panel);
         scr.text(22, y + 1 + i, `${m.k}/${m.d}`, C.text, C.panel);
-        const rp = (m.rp > 0 ? '+' : '') + m.rp + (m.rp > 0 ? ' ^' : ' v');
+        const rp = m.mode === 'ZOMBIES' ? `wave ${m.wave || m.place}` : (m.rp > 0 ? '+' : '') + m.rp + (m.rp > 0 ? ' ^' : ' v');
         scr.text(2 + leftW - 3 - [...rp].length, y + 1 + i, rp, m.rp > 0 ? [110, 190, 130] : [200, 80, 80], C.panel);
       });
     }
@@ -383,7 +388,7 @@ export class Lobby {
     const by = Math.min(my + 1, bottom - 6);
     const pulse = 0.6 + 0.4 * Math.sin(app.time * 3);
     if (ui.button('play', rx, by, rightW, `P L A Y  ·  ${m.name}`, { h: 5, fg: C.bright, border: [200 * pulse + 40, 204 * pulse + 40, 212 * pulse + 40] })) this.tryPlay();
-    scr.textC(by + 6, m.id === 'zombie' ? 'solo · stars for every zombie and wave' : 'ranked · RP changes after every match', C.line, null, rx + rightW / 2);
+    scr.textC(by + 6, m.id === 'zombie' ? 'solo · stars for every zombie and wave' : 'ranked · ELO changes after every match', C.line, null, rx + rightW / 2);
   }
 
   // symbol rain + platform + character + orbiting aura of your rank symbol
@@ -587,7 +592,7 @@ export class Lobby {
     scr.box(2, y, lw, 7, GOLD.map(v => v * 0.5), C.panel);
     scr.text(4, y, ' WALLET ', C.dim, C.panel);
     scr.put(4, y + 2, '★', GOLD, C.panel);
-    scr.text(6, y + 2, `${stars} stars`, C.bright, C.panel);
+    scr.text(6, y + 2, `${fmtStars(stars)} stars`, C.bright, C.panel);
     scr.text(4, y + 4, 'kill +5 · top 3 +20', C.line, C.panel);
     scr.text(4, y + 5, 'win +50 · match +10', C.line, C.panel);
 
@@ -620,7 +625,8 @@ export class Lobby {
     scr.text(x + 3, y + 1, 'PRICE', C.dim, C.panel);
     scr.put(x + 10, y + 1, '★', GOLD, C.panel);
     scr.text(x + 12, y + 1, `${it.price}`, C.bright, C.panel);
-    scr.text(x + w - 3 - `you have ★ ${stars}`.length, y + 1, `you have ★ ${stars}`, C.dim, C.panel);
+    const have = `you have ★ ${fmtStars(stars)}`;
+    scr.text(x + w - 3 - have.length, y + 1, have, C.dim, C.panel);
     const by = Math.min(y + 3, bottom - 4), bw = w - 6;
     if (this.confirm && this.confirm.idx === idx && (this.confirm.t -= 1 / 60) <= 0) this.confirm = null;
     if (own) {
@@ -762,6 +768,104 @@ export class Lobby {
     if (app.input.mouseClicked[0] && !inside) this.popup = null;
   }
 
+  // ═════════════════ RANK-UP ANIMATION ═════════════════
+  // division up (STAR I → STAR II): short and calm · new rank (VORTEX → EIGEN): big, longer, more symbols the higher it is
+  startRankUp(from, to) {
+    const tierUp = to.tier > from.tier;
+    const dur = tierUp ? (to.tier === FINAL ? 8 : 4.6 + to.tier * 0.3) : 3.2;
+    this.rankUp = { from, to, tierUp, t: 0, dur, parts: [], rain: [], played: 0 };
+    this.app.audio.rankUp && this.app.audio.rankUp(tierUp ? to.tier : -1);
+  }
+  drawRankUp(dt) {
+    const app = this.app, scr = app.scr, cols = scr.cols, rows = scr.rows, R = this.rankUp, inp = app.input;
+    R.t += dt;
+    const T = R.t / R.dur, to = R.to, from = R.from, tier = TIERS[to.tier], eig = to.tier === FINAL;
+    const epic = R.tierUp ? 0.6 + to.tier / 8 : 0.35;
+    if (R.t > 0.6 && (inp.mouseClicked[0] || inp.pressed.has('Enter') || inp.pressed.has('Escape') || inp.pressed.has('Space'))) T > 0.85 ? (this.rankUp = null) : (R.t = R.dur * 0.86);
+    if (R.t >= R.dur) { this.rankUp = null; return; }
+    const fadeIn = Math.min(1, R.t / 0.4), fadeOut = Math.min(1, (R.dur - R.t) / 0.5), A = fadeIn * fadeOut;
+    scr.dim(0, 0, cols, rows, 1 - 0.82 * A);
+    const cx = cols / 2, cy = Math.floor(rows / 2) - 4;
+    const col = k => eig ? TIERS[k % FINAL].col : tier.col;
+    const glyphs = eig ? TIERS.map(t => t.g) : [tier.g, tier.g, '.', '*'];
+    // symbol rain — denser for higher ranks
+    const rainN = Math.floor(cols * (R.tierUp ? 0.25 + to.tier * 0.06 : 0.12));
+    if (R.rain.length < rainN && Math.random() < 0.9) for (let i = 0; i < 4; i++) R.rain.push({ x: Math.random() * cols, y: -Math.random() * 10, v: 8 + Math.random() * 22 * epic, k: Math.floor(Math.random() * 9) });
+    for (const d of R.rain) {
+      d.y += d.v * dt;
+      if (d.y > rows) { d.y = -2; d.x = Math.random() * cols; }
+      for (let j = 0; j < 4; j++) {
+        const yy = Math.floor(d.y) - j;
+        if (yy < 0 || yy >= rows) continue;
+        const a = A * (1 - j / 4) * 0.55;
+        scr.put(Math.floor(d.x), yy, glyphs[(d.k + j) % glyphs.length], col(d.k + j).map(v => v * a));
+      }
+    }
+    // the old emblem breaks apart, a shock wave of the new rank symbol, then the new emblem grows in
+    const breakT = R.tierUp ? 0.18 : 0.12, growT = R.tierUp ? 0.34 : 0.2;
+    if (R.tierUp && T < breakT) {
+      const k = 1 - T / breakT * 0.3 + Math.sin(R.t * 60) * 0.02 * T / breakT;
+      drawEmblem(scr, cx + (Math.random() - 0.5) * 2 * T / breakT, cy - 6, from.tier, k, 30, 13, [4, 4, 6]);
+    }
+    if (R.played === 0 && T >= breakT) {
+      R.played = 1;
+      const n = R.tierUp ? 120 + to.tier * 40 : 50;
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2, sp = (6 + Math.random() * 30) * epic;
+        R.parts.push({ x: cx, y: cy, vx: Math.cos(a) * sp * 2, vy: Math.sin(a) * sp, life: 1 + Math.random() * 1.2, max: 2.2,
+          ch: R.tierUp ? (Math.random() < 0.5 ? TIERS[from.tier].g : glyphs[i % glyphs.length]) : '*', k: i });
+      }
+      app.audio.rankBoom && app.audio.rankBoom(R.tierUp ? to.tier : -1);
+    }
+    for (const p of R.parts) {
+      p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.97; p.vy = p.vy * 0.97 + 4 * dt;
+      if (p.life <= 0) continue;
+      const a = Math.min(1, p.life) * A;
+      scr.put(Math.floor(p.x), Math.floor(p.y), p.ch, col(p.k).map(v => Math.min(255, v * 1.3 * a)));
+    }
+    if (T >= breakT) {
+      // expanding rings (more rings for higher ranks)
+      const ringsN = R.tierUp ? 1 + Math.floor(to.tier / 2) : 1;
+      for (let r = 0; r < ringsN; r++) {
+        const tt = (T - breakT) * (R.tierUp ? 1.6 : 2.2) - r * 0.12;
+        if (tt <= 0 || tt > 1) continue;
+        const rad = tt * Math.max(cols, rows * 2) * 0.55, a = (1 - tt) * A;
+        for (let i = 0; i < 160; i++) {
+          const ang = i / 160 * Math.PI * 2;
+          const x = Math.floor(cx + Math.cos(ang) * rad), y = Math.floor(cy + Math.sin(ang) * rad * 0.5);
+          scr.put(x, y, glyphs[(i + r) % glyphs.length], col(i + r).map(v => v * a * 1.2));
+        }
+      }
+      // new emblem grows (sizes in steps → cached art)
+      const g = Math.min(1, (T - breakT) / (growT - breakT + 0.0001));
+      const ease = 1 - Math.pow(1 - g, 3);
+      const big = R.tierUp ? (eig ? 40 : 32) : 26;
+      const w = Math.max(6, Math.round(big * ease / 2) * 2), h = Math.max(3, Math.round(w * 0.43));
+      const pulse = 1 + Math.sin(R.t * 4) * 0.08 * epic;
+      drawEmblem(scr, cx, cy - Math.floor(h / 2) - 1, to.tier, Math.min(1.25, (0.6 + ease * 0.5) * pulse), w, h, [4, 4, 6]);
+      // orbiting symbols
+      const orbN = R.tierUp ? 10 + to.tier * 3 : 6;
+      for (let i = 0; i < orbN; i++) {
+        const ang = R.t * (0.8 + epic) + i / orbN * Math.PI * 2, rr = big * 0.75 * ease;
+        scr.put(Math.floor(cx + Math.cos(ang) * rr), Math.floor(cy - 1 + Math.sin(ang) * rr * 0.4), glyphs[i % glyphs.length], col(i).map(v => v * A));
+      }
+      // texts
+      if (T > growT) {
+        const a = Math.min(1, (T - growT) * 5) * A;
+        const yT = cy + Math.floor(big * 0.25) + 2;
+        const head = R.tierUp ? (eig ? 'Λ  F I N A L   R A N K  Λ' : 'N E W   R A N K') : 'D I V I S I O N   U P';
+        scr.textC(yT, head, [200, 200, 205].map(v => v * a));
+        const name = [...`${tier.name} ${ROMAN[to.div]}`].join(' ');
+        const shake = R.tierUp && T < growT + 0.05 ? Math.round((Math.random() - 0.5) * 2) : 0;
+        scr.textC(yT + 2, `${tier.g}  ${name}  ${tier.g}`, tier.col.map(v => Math.min(255, v * 1.25 * a)), null, cx + shake);
+        scr.textC(yT + 3, [0, 1, 2].map(i => i <= to.div ? '<#>' : '<.>').join(' '), tier.col.map(v => v * a));
+        scr.textC(yT + 5, `ELO ${fmtElo(to.elo)}`, [230, 230, 235].map(v => v * a));
+        if (R.tierUp) scr.textC(yT + 6, `${TIERS[from.tier].name} ${ROMAN[from.div]}  →  ${tier.name} ${ROMAN[to.div]}`, C.dim.map(v => v * a));
+        scr.textC(rows - 3, 'click to continue', C.line.map(v => v * a));
+      }
+    }
+  }
+
   // ───────── RANKS tab ─────────
   drawRanks() {
     const app = this.app, scr = app.scr, cols = scr.cols;
@@ -779,8 +883,8 @@ export class Lobby {
       const yy = 8 + row * 14;
       drawEmblem(scr, cx, yy, i, on ? 1 : i < cur.tier ? 0.75 : 0.5, 20, 9, C.bg);
       scr.textC(yy + 9, t.name, on ? C.bright : C.text, null, cx);
-      scr.textC(yy + 10, `${i * 300} RP`, C.dim, null, cx);
-      if (on) scr.textC(yy + 11, `^ YOU · ${ROMAN[cur.div]}`, t.col, null, cx);
+      scr.textC(yy + 10, `${fmtElo(rankStart(i))} ELO`, C.dim, null, cx);
+      if (on) scr.textC(yy + 11, `^ YOU · ${t.name} ${ROMAN[cur.div]}`, t.col, null, cx);
     }
     // the final rank
     const fy = 8 + rowsN * 14;
@@ -788,11 +892,11 @@ export class Lobby {
     const on = cur.tier === FINAL;
     const h = drawEmblem(scr, cols / 2, fy + 1, FINAL, on ? 1 : 0.85, 34, 13, C.bg);
     scr.textC(fy + h + 2, 'E I G E N', [244, 236, 214]);
-    scr.textC(fy + h + 3, `${FINAL * 300}+ RP · final rank · λ in its core, every rank around it`, C.dim);
-    if (on) scr.textC(fy + h + 4, '^ YOU', [244, 236, 214]);
+    scr.textC(fy + h + 3, `EIGEN I ${fmtElo(rankStart(8, 0))} · II ${fmtElo(rankStart(8, 1))} · III ${fmtElo(rankStart(8, 2))} ELO · λ in its core, every rank around it`, C.dim);
+    if (on) scr.textC(fy + h + 4, `^ YOU · EIGEN ${ROMAN[cur.div]} · ${fmtElo(cur.elo)} ELO`, [244, 236, 214]);
     const lines = [
-      'each rank has 3 divisions (I · II · III), 100 RP each',
-      'win  +25 RP    top 3  +10 RP    kill  +2 RP    loss  -15 RP',
+      `every rank has 3 divisions (I · II · III) · your ELO: ${fmtElo(cur.elo)}`,
+      'win  +50 ELO    top 3  +20 ELO    kill  +4 ELO    loss  -15 ELO    · after EIGEN III the ELO keeps growing',
     ];
     lines.forEach((l, i) => scr.textC(fy + h + 6 + i, l, C.dim));
   }
@@ -933,7 +1037,8 @@ export class Lobby {
     drawEmblem(scr, lx + 14, y, r.tier, 1, 22, 10);
     const tx = lx + 27;
     scr.text(tx, y + 3, r.label, tier.col, C.panel);
-    scr.text(tx, y + 4, `${p.rp} RP`, C.text, C.panel);
+    scr.text(tx, y + 4, `ELO ${fmtElo(p.rp)}`, C.text, C.panel);
+    if (r.need) scr.text(tx, y + 5, `next ${fmtElo(r.next)}`, C.dim, C.panel);
     scr.put(tx, y + 6, '★', GOLD, C.panel);
     scr.text(tx + 2, y + 6, `${fmtStars(p.stars)} stars`, C.bright, C.panel);
     y += 9;
@@ -961,7 +1066,7 @@ export class Lobby {
       scr.text(lx + 3, yy, `#${m.place}`, m.place === 1 ? GOLD : C.dim, C.panel);
       scr.text(lx + 8, yy, m.mode, C.dim, C.panel);
       scr.text(lx + 21, yy, `${m.k}/${m.d}`, C.text, C.panel);
-      const rp = (m.rp > 0 ? '+' : '') + m.rp + ' RP';
+      const rp = m.mode === 'ZOMBIES' ? `wave ${m.wave || m.place}` : (m.rp > 0 ? '+' : '') + m.rp + ' ELO';
       scr.text(lx + lw - 3 - rp.length, yy, rp, m.rp > 0 ? ONLINE : [200, 80, 80], C.panel);
     });
 

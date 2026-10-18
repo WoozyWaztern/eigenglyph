@@ -175,11 +175,15 @@ function eigen(ctx, tiers) {
 
 export function emblemPainter(tier, tiers) {
   return (ctx, W, H) => {
-    const S = Math.min(W / (tier >= 4 ? 170 : 104), H / (tier === 8 ? 140 : 104));
+    // the badge is the same size for every rank; wings (STAR and up) squeeze into the width that is left
+    const S = tier === 8 ? Math.min(W / 170, H / 140) : Math.min(W / 104, H / 104);
     ctx.translate(W / 2, H / 2 + (tier === 8 ? 8 * S : 0)); ctx.scale(S, S);
     if (tier === 8) return eigen(ctx, tiers);
     const col = tiers[tier].col;
-    if (tier >= 4) wings(ctx, col, tier >= 6);
+    if (tier >= 4) {
+      const room = W / S / 2 - 2, sx = Math.max(0.55, Math.min(1, room / 80));
+      ctx.save(); ctx.scale(sx, 1); wings(ctx, col, tier >= 6); ctx.restore();
+    }
     badge(ctx, col, tier >= 6 ? 8 : 6, tier >= 6 ? Math.PI / 8 : Math.PI / 6);
     MOTIF[tier](ctx, col);
   };

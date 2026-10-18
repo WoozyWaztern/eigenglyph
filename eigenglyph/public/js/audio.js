@@ -238,6 +238,20 @@ export class Audio {
     for (let i = 0; i < 8; i++) this._noise(o, t + i * 0.03, 0.02, 'bandpass', 3000 + i * 150, 4, 0.35, 0.02);
   }
 
+  // rank-up: rising notes (more and higher for better ranks), then a boom
+  rankUp(tier) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0, 0.6);
+    const n = tier < 0 ? 3 : 4 + Math.min(5, tier);
+    for (let i = 0; i < n; i++) this._tone(o, t + i * 0.09, 'triangle', 330 * Math.pow(1.26, i), 330 * Math.pow(1.26, i) * 1.01, 0.5, 0.18);
+  }
+  rankBoom(tier) {
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0, 0.9);
+    const big = tier < 0 ? 0.4 : 0.6 + tier / 10;
+    this._tone(o, t, 'sine', 140, 40, 0.8 * big + 0.4, 0.9 * big);
+    this._noise(o, t, 1.2, 'lowpass', 900, 0.5, 0.5 * big, 0.9 * big);
+    for (let i = 0; i < 3; i++) this._tone(o, t + 0.05 + i * 0.06, 'sine', 660 * (i + 1), 660 * (i + 1), 0.9, 0.12 * big);
+  }
+
   groan(pan = 0, vol = 1) {
     if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol * 0.7);
     const f0 = 90 + Math.random() * 40;

@@ -9,7 +9,7 @@ import { Net } from './net.js';
 import { Renderer } from './render3d.js';
 import { ViewModel } from './viewmodel.js';
 import { Game } from './game.js';
-import { Lobby } from './lobby.js';
+import { Lobby, rankOf } from './lobby.js';
 import { makePrim, setRotYXZ, hitPrim, HIT, BOX } from './prims.js';
 
 const TITLE = 'EIGENYTH';
@@ -79,6 +79,7 @@ class App {
           this.nick = m.name; localStorage.setItem('eg_nick', m.name);
           if (m.stats) this.profile = m.stats;
           this.isDev = !!m.dev;
+          this.checkRank(true);
           this.lan = m.lan || [];
           this.net.send({ t: 'social' });
           if (this.state === 'login') this.ui.focus = null;
@@ -92,7 +93,7 @@ class App {
       case 'online': this.online = m.n; break;
       case 'devlog': this.devLog.push({ text: m.text, ok: m.ok !== false }); if (this.devLog.length > 200) this.devLog.shift(); break;
       case 'devset': this.devFlags = m.dev; this.game.onNet(m); break;
-      case 'profile': this.profile = m.stats; break;
+      case 'profile': this.profile = m.stats; this.checkRank(false); break;
       case 'social': this.social = m; break;
       case 'searchRes': this.searchRes = m; break;
       case 'profileView': this.viewed = m.p; break;
@@ -126,6 +127,19 @@ class App {
     this.creds = null; this.pass = ''; this.state = 'login'; this.ui.focus = 'pass';
     this.net.ws && this.net.ws.close();
   }
+  // rank went up since the last time this browser saw it → play the rank-up animation in the lobby.
+  // Several ranks at once (dev: rank eigen) → only the last change is shown.
+  checkRank(login) {
+    if (!this.profile) return;
+    const r = rankOf(this.profile.rp), key = r.tier * 3 + r.div;
+    const sk = 'eg_rank_' + this.nick.toLowerCase();
+    let seen = null;
+    try { seen = JSON.parse(localStorage.getItem(sk) || 'null'); } catch {}
+    if (!seen || login && seen.key === undefined) seen = null;
+    if (seen && key > seen.key) this.pendingRank = { from: { tier: seen.tier, div: seen.div }, to: r };
+    try { localStorage.setItem(sk, JSON.stringify({ key, tier: r.tier, div: r.div })); } catch {}
+  }
+
   // ── F9: developer panel (only the account WoozyWaztern — the server checks it too) ──
   devPanel() {
     const inp = this.input, scr = this.scr;
@@ -190,7 +204,10 @@ class App {
       this.game.draw(dt);
     } else {
       if (this.state === 'login') { scr.fine.clear(...C.bg); this.drawBackground(); this.drawLogin(); }
-      else this.lobby.draw(dt);
+      else {
+        if (this.pendingRank) { this.lobby.startRankUp(this.pendingRank.from, this.pendingRank.to); this.pendingRank = null; }
+        this.lobby.draw(dt);
+      }
     }
     this.devPanel();
     this.ui.cursor();
@@ -329,7 +346,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'Eigenyth v1.2 · shop update · everything here is a character';
+    const r = 'Eigenyth v1.4 · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }

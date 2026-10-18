@@ -314,7 +314,7 @@ function endMatch(room) {
     list.sort((a, b) => (a.team === win ? 0 : 1) - (b.team === win ? 0 : 1) || b.kills - a.kills);
     results = list.map(p => {
       const won = p.team === win, draw = win < 0;
-      const delta = ranked ? (won ? 25 : draw ? 5 : -10) : 0, stars = ranked ? (won ? 50 : draw ? 20 : 10) : 0;
+      const delta = ranked ? (won ? 50 : draw ? 10 : -15) : 0, stars = ranked ? (won ? 50 : draw ? 20 : 10) : 0;
       if (ranked) record(p, won ? 1 : 2, delta, stars);
       return { id: p.id, name: p.name, kills: p.kills, deaths: p.deaths, place: won ? 1 : 2, rp: delta, stars, team: p.team };
     });
@@ -322,7 +322,7 @@ function endMatch(room) {
     list.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
     results = list.map((p, i) => {
       const place = i + 1;
-      const delta = ranked ? (place === 1 ? 25 : place <= 3 ? 10 : -15) : 0, stars = ranked ? rewardFor(place) : 0;
+      const delta = ranked ? (place === 1 ? 50 : place <= 3 ? 20 : -15) : 0, stars = ranked ? rewardFor(place) : 0;
       if (ranked) record(p, place, delta, stars);
       return { id: p.id, name: p.name, kills: p.kills, deaths: p.deaths, place, rp: delta, stars };
     });
@@ -335,7 +335,7 @@ function record(p, place, delta, stars) {
   st.matches++; if (place === 1) st.wins++;
   st.rp = Math.max(0, st.rp + delta);
   st.stars += stars;
-  st.history.unshift({ place, mode: (world.MODE_INFO[p.room.mode] || {}).name || 'DEATHMATCH', k: p.kills, d: p.deaths, rp: delta + p.kills * 2 });
+  st.history.unshift({ place, mode: (world.MODE_INFO[p.room.mode] || {}).name || 'DEATHMATCH', k: p.kills, d: p.deaths, rp: delta + p.kills * 4 });
   st.history = st.history.slice(0, 8);
   sendProfile(p.c);
 }
@@ -430,7 +430,7 @@ function damage(room, target, attacker, dmg, weapon, wounds, pts) {
     attacker.kills++;
     if (pvp) {
       const sa = statsOf(attacker.c.acc);
-      sa.kills++; sa.rp += 2; sa.stars += 5;
+      sa.kills++; sa.rp += 4; sa.stars += 5;
       sendProfile(attacker.c);
     }
   }
@@ -795,7 +795,8 @@ const RANK_NAMES = ['dot', 'blade', 'wave', 'shield', 'star', 'fortress', 'sigil
 const DEV_HELP = [
   'help                     this list',
   'stars <n> | stars +<n>   set / add stars',
-  'rp <n>                   set RP',
+  'stars 1m / 2b / 1t / 1e30 / googol   huge amounts work too',
+  'elo <n> | elo +<n>       set / add ELO (EIGEN I 15000 · III 20000)',
   'rank <name> [1-3]        dot blade wave shield star fortress sigil vortex eigen',
   'give <item|all>          ak47 pistol hknife bat molotov medkit',
   'take <item|all>          remove from inventory',
@@ -813,10 +814,21 @@ const DEV_HELP = [
   'spawn <n>                ZOMBIES: spawn n zombies',
   'killall                  kill every zombie',
   'set <stat> <n>           kills deaths wins matches bestWave',
-  'resetstats               zero kills/deaths/wins/matches/RP',
+  'resetstats               zero kills/deaths/wins/matches/ELO',
   'flags                    show what is on',
   'clear                    clear this panel',
 ];
+// "5000", "1.5m", "2b", "1t", "3qa", "1e100", "googol" → number
+const NUM_SUFFIX = { k: 1e3, m: 1e6, b: 1e9, t: 1e12, qa: 1e15, qi: 1e18, sx: 1e21, sp: 1e24, oc: 1e27, no: 1e30, dc: 1e33 };
+function bigNum(v) {
+  v = String(v || '').trim().toLowerCase().replace(/[\s_]/g, '');
+  if (v === 'googol' || v === '+googol') return 1e100;
+  const m = v.match(/^([+-]?[\d.]+(?:e[+-]?\d+)?)([a-z]*)$/);
+  if (!m) return NaN;
+  const mul = m[2] ? NUM_SUFFIX[m[2]] : 1;
+  return mul ? Number(m[1]) * mul : NaN;
+}
+const fmtBig = n => n >= 1e15 ? n.toExponential(2) : Math.floor(n).toLocaleString('en-US');
 function devReply(c, text, ok = true) { send(c.ws, { t: 'devlog', text, ok }); }
 function onDev(c, m) {
   if (!c.acc || c.name.toLowerCase() !== DEV_NAME) return send(c.ws, { t: 'devlog', text: 'access denied', ok: false });
@@ -830,18 +842,23 @@ function onDev(c, m) {
   switch (cmd) {
     case 'help': case '?': for (const l of DEV_HELP) devReply(c, l); return;
     case 'stars': {
-      if (!a1 || !Number.isFinite(num(a1))) return devReply(c, 'usage: stars 500  or  stars +500', false);
-      st.stars = Math.max(0, /^[+-]/.test(a1) ? st.stars + num(a1) : num(a1)) | 0;
-      saveSoon(); sendProfile(c); return devReply(c, `stars = ${st.stars}`);
+      const v = bigNum(a1);
+      if (!a1 || !Number.isFinite(v)) return devReply(c, 'usage: stars 500 · stars +500 · stars 1m · stars 2b · stars 1t · stars 1e30 · stars googol', false);
+      st.stars = Math.max(0, Math.floor(/^[+-]/.test(a1) ? st.stars + v : v));
+      if (!Number.isFinite(st.stars)) st.stars = 1e300;
+      saveSoon(); sendProfile(c); return devReply(c, `stars = ${fmtBig(st.stars)}`);
     }
-    case 'rp': if (!Number.isFinite(num(a1))) return devReply(c, 'usage: rp 900', false);
-      st.rp = Math.max(0, num(a1) | 0); saveSoon(); sendProfile(c); return devReply(c, `RP = ${st.rp}`);
+    case 'elo': case 'rp': {
+      const v = bigNum(a1);
+      if (!Number.isFinite(v)) return devReply(c, 'usage: elo 15000  or  elo +500', false);
+      st.rp = Math.max(0, Math.floor(/^[+-]/.test(a1) ? st.rp + v : v)); saveSoon(); sendProfile(c); return devReply(c, `ELO = ${fmtBig(st.rp)}`);
+    }
     case 'rank': {
       const i = RANK_NAMES.indexOf(String(a1 || '').toLowerCase());
-      if (i < 0) return devReply(c, 'usage: rank sigil 2   (dot blade wave shield star fortress sigil vortex eigen)', false);
+      if (i < 0) return devReply(c, 'usage: rank star 2   (dot blade wave shield star fortress sigil vortex eigen + 1/2/3)', false);
       const div = Math.max(1, Math.min(3, num(a2) || 1)) - 1;
-      st.rp = i === 8 ? 2400 : (i * 3 + div) * 100; saveSoon(); sendProfile(c);
-      return devReply(c, `rank ${a1.toUpperCase()}${i === 8 ? '' : ' ' + ['I', 'II', 'III'][div]} · RP = ${st.rp}`);
+      st.rp = world.rankStart(i, div); saveSoon(); sendProfile(c);
+      return devReply(c, `rank ${a1.toUpperCase()} ${['I', 'II', 'III'][div]} · ELO = ${st.rp}`);
     }
     case 'give': case 'take': {
       const ids = a1 === 'all' ? world.ITEMS.filter(i => !i.starter).map(i => i.id) : [a1];

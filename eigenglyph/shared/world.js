@@ -310,3 +310,23 @@ export const TEAM_NAME = ['RED', 'BLUE'];
 export function zombieWave(n) {
   return { count: Math.min(32, 3 + n * 2), hp: 30 + n * 12, speed: Math.min(5.4, 2.4 + n * 0.18), dmg: 8 + n * 2 };
 }
+
+// ── RANKS: 9 ranks × 3 divisions (I · II · III). ELO needed for one division of each rank.
+// DOT 0 · BLADE 300 · WAVE 750 · SHIELD 1350 · STAR 2100 · FORTRESS 4500 · SIGIL 7500 · VORTEX 11100
+// EIGEN I 15000 · EIGEN II 17500 · EIGEN III 20000 — and ELO keeps growing after that.
+export const RANK_DIV = [100, 150, 200, 250, 800, 1000, 1200, 1300, 2500];
+export const RANK_NAMES = ['DOT', 'BLADE', 'WAVE', 'SHIELD', 'STAR', 'FORTRESS', 'SIGIL', 'VORTEX', 'EIGEN'];
+export function rankStart(tier, div = 0) {
+  let e = 0;
+  for (let t = 0; t < tier; t++) e += RANK_DIV[t] * 3;
+  return e + RANK_DIV[tier] * div;
+}
+export function rankFromElo(elo) {
+  elo = Math.max(0, Math.floor(elo || 0));
+  for (let t = 0; t < RANK_DIV.length; t++) {
+    for (let d = 0; d < 3; d++) {
+      const s = rankStart(t, d), n = s + RANK_DIV[t];
+      if (elo < n || (t === RANK_DIV.length - 1 && d === 2)) return { tier: t, div: d, start: s, next: t === 8 && d === 2 ? 0 : n };
+    }
+  }
+}

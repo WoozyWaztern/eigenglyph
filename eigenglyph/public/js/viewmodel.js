@@ -12,6 +12,12 @@ const R = new Float32Array(9), R2 = new Float32Array(9);
 const lerp = (a, b, t) => a + (b - a) * t;
 const sm = t => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
 const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+// every gun points exactly at the crosshair: a point straight ahead of the camera
+const AIM_Z = 14;
+function aimAngles(pos, barrelY = 0) {
+  const dx = -pos[0], dy = -(pos[1] + barrelY), dz = AIM_Z - pos[2];
+  return [Math.atan2(dx, dz), -Math.atan2(dy, Math.hypot(dx, dz))];
+}
 
 // keyframe track: [[time, value3], ...] → value at s
 function track(keys, s) {
@@ -81,12 +87,13 @@ export class ViewModel {
       // ───────── SHOTGUN ─────────
       const a = sm(st.ads);
       const rl = st.reload >= 0 ? sm(Math.min(1, st.reloadBlend)) : 0;
-      let pos = lerp3([0.3, -0.235, 0.56], [0.0, -0.135, 0.62], a);
-      pos = lerp3(pos, [0.20, -0.22, 0.58], rl);
+      let pos = lerp3([0.2, -0.23, 0.6], [0.0, -0.135, 0.62], a);
+      pos = lerp3(pos, [0.18, -0.21, 0.58], rl);
+      const [ay, ap] = aimAngles(pos, 0.028);
       pos[0] += ox; pos[1] += oy + st.recoil * 0.035; pos[2] += oz - st.recoil * 0.11;
-      const yaw = lerp(-0.5, 0, a) + rl * -0.2;
-      const pitch = -st.recoil * 0.38 + eq * 0.9 + rl * -0.1 + st.pump * 0.06;
-      const roll = lerp(0.12, 0, a) + rl * 0.55 + st.pump * 0.05;
+      const yaw = ay + rl * -0.35;
+      const pitch = ap - st.recoil * 0.38 + eq * 0.9 + rl * -0.1 + st.pump * 0.06;
+      const roll = lerp(0.04, 0, a) + rl * 0.55 + st.pump * 0.05;
       setRotYXZ(R, yaw, pitch, roll);
       const pumpOff = -st.pump * 0.12;
 
@@ -154,13 +161,14 @@ export class ViewModel {
       const ak = st.w === 3;
       const a = sm(st.ads);
       const rel = st.reload, rl = rel >= 0 ? sm(Math.min(1, st.reloadBlend)) : 0;
-      let pos = ak ? lerp3([0.3, -0.2, 0.52], [0.0, -0.075, 0.6], a) : lerp3([0.16, -0.13, 0.44], [0.0, -0.075, 0.46], a);
-      pos = lerp3(pos, ak ? [0.14, -0.18, 0.58] : [0.08, -0.12, 0.4], rl);
-      const kick = st.recoil * (ak ? 0.5 : 1);
-      pos[0] += ox; pos[1] += oy + kick * 0.012; pos[2] += oz - kick * (ak ? 0.035 : 0.045);
-      const yaw = lerp(ak ? -0.62 : -0.3, 0, a) + rl * (ak ? -0.2 : -0.2);
-      const pitch = -kick * (ak ? 0.08 : 0.32) + eq * 0.9 - rl * 0.12;
-      const roll = lerp(ak ? 0.12 : 0.06, 0, a) + rl * (ak ? 0.5 : 0.7);
+      let pos = ak ? lerp3([0.19, -0.2, 0.56], [0.0, -0.075, 0.6], a) : lerp3([0.11, -0.14, 0.44], [0.0, -0.07, 0.46], a);
+      pos = lerp3(pos, ak ? [0.14, -0.19, 0.56] : [0.08, -0.13, 0.42], rl);
+      const [ay, ap] = aimAngles(pos, ak ? 0 : 0.035);
+      const kick = st.recoil * (ak ? 0.6 : 1);
+      pos[0] += ox; pos[1] += oy + kick * 0.015; pos[2] += oz - kick * (ak ? 0.04 : 0.05);
+      const yaw = ay + rl * (ak ? -0.3 : -0.25);
+      const pitch = ap - kick * (ak ? 0.12 : 0.38) + eq * 0.9 - rl * 0.12;
+      const roll = lerp(0.03, 0, a) + rl * (ak ? 0.5 : 0.7);
       setRotYXZ(R, yaw, pitch, roll);
       const offs = {};
       // magazine out → new magazine in
@@ -230,7 +238,7 @@ export class ViewModel {
     }
     else if (st.w === 6) {
       // ───────── BASEBALL BAT ─────────  (grip point + direction of the bat)
-      const gI = [0.27, -0.3, 0.44], dI = [-0.32, 1, 0.12];
+      const gI = [0.25, -0.3, 0.46], dI = [-0.2, 1, 0.42];
       let g = gI, d = dI;
       if (st.slash >= 0) {
         const s = st.slash, side = st.slashSide;
@@ -250,7 +258,7 @@ export class ViewModel {
     }
     else if (st.w === 7) {
       // ───────── MOLOTOV ─────────  (model axis z = up along the bottle)
-      const pI = [0.21, -0.21, 0.54], aI = [0.15, 1, 0.12];
+      const pI = [0.18, -0.2, 0.48], aI = [0.12, 1, -0.15];   // held upright, like the soda
       let pos = pI, axis = aI, show = st.has, rise = 0;
       const th = st.throwT;
       if (th >= 0) {
@@ -262,7 +270,7 @@ export class ViewModel {
       pos = [pos[0] + ox, pos[1] + oy - rise, pos[2] + oz];
       setDirZ(R, axis[0], axis[1] - eq * 1.5, axis[2]);
       if (show) n = placeItem(POOL, n, out, 7, pos, R, 1.05);
-      const h = show ? world(pos, R, 0.047, -0.01, -0.02) : [pos[0] + 0.03, pos[1] - 0.04, pos[2]];
+      const h = show ? [pos[0] + 0.05, pos[1] - 0.015, pos[2] - 0.006] : [pos[0] + 0.03, pos[1] - 0.04, pos[2]];
       hand(h[0], h[1], h[2], 0.066);
       arm(h[0], h[1], h[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
       this.muzzle = world(pos, R, 0, 0, 0.2);
