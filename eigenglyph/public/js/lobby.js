@@ -190,9 +190,8 @@ export class Lobby {
     // ── top bar ──
     scr.fill(0, 0, cols, 3, ' ', C.text, C.panel);
     for (let x = 0; x < cols; x++) scr.put(x, 2, '-', C.line, C.panel);
-    scr.text(2, 1, 'EIGENGLYPH', C.bright, C.panel);
-    scr.text(13, 1, ': ΣVOID', C.dim, C.panel);
-    scr.text(22, 1, '· season 0 · the first glyph', C.line, C.panel);
+    scr.text(2, 1, 'EIGENYTH', C.bright, C.panel);
+    scr.text(12, 1, '· season 0 · the first glyph', C.line, C.panel);
     const tabs = ['PLAY', 'FRIENDS', 'RANKS', 'PROFILE'];
     let tx = Math.floor(cols / 2 - 22);
     const reqs = (app.social && app.social.requests || []).length;
@@ -200,7 +199,7 @@ export class Lobby {
       const w = name.length + 4, on = this.tab === i;
       const hov = ui.over(tx, 0, w, 3);
       if (hov) ui.hot = 'tab' + i;
-      if (hov && app.input.mouseClicked[0]) { this.tab = i; app.audio.uiClick(); }
+      if (hov && app.input.mouseClicked[0]) { this.tab = i; if (i === 3) this.viewing = null; app.audio.uiClick(); }
       scr.text(tx + 2, 1, name, on ? C.bright : hov ? C.text : C.dim, C.panel);
       if (on) for (let k = 0; k < w; k++) scr.put(tx + k, 2, '=', C.bright, C.panel);
       // red notification badge in the top-right corner of PROFILE
@@ -373,9 +372,9 @@ export class Lobby {
   }
 
   // symbol rain + platform + character + orbiting aura of your rank symbol
-  drawStage(key, [x0, y0, w, h], dt) {
+  drawStage(key, [x0, y0, w, h], dt, rp = this.profile.rp) {
     const scr = this.app.scr.art, t = this.app.time, D = this.app.scr.ART;
-    const r = rankOf(this.profile.rp), tier = TIERS[r.tier], tint = tier.col;
+    const r = rankOf(rp), tier = TIERS[r.tier], tint = tier.col;
     scr.fill(x0, y0, w, h, ' ', null, [10, 11, 14]);
     // rain
     if (!this.rains) this.rains = {};
@@ -396,12 +395,12 @@ export class Lobby {
         scr.put(x0 + x, y0 + yy, g, col);
       }
     }
-    this.drawCharacter(x0, y0, w, h, tint);
+    this.drawCharacter(x0, y0, w, h, tint, rp);
   }
 
-  drawCharacter(x0, y0, w, h, tint) {
+  drawCharacter(x0, y0, w, h, tint, rp = this.profile.rp) {
     const scr = this.app.scr.art, t = this.app.time;
-    const r = rankOf(this.profile.rp), tier = TIERS[r.tier];
+    const r = rankOf(rp), tier = TIERS[r.tier];
     const yaw = Math.sin(t * 0.6) * 0.45;
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
     const bob = Math.sin(t * 2) * 0.04;
@@ -522,7 +521,7 @@ export class Lobby {
 
     // ── left: find players ──
     scr.box(lx, top, lw, bottom - top, C.line, C.panel);
-    scr.text(lx + 2, top, ' FIND PLAYERS ', C.dim, C.panel);
+    scr.text(lx + 2, top, ' FIND PLAYERS · click a name to open the profile ', C.dim, C.panel);
     this.query = ui.field('search', lx + 2, top + 2, lw - 22, this.query || '', {
       label: 'NICKNAME', max: 16, placeholder: 'type a nickname…', onEnter: () => this.doSearch(),
     });
@@ -545,7 +544,10 @@ export class Lobby {
       if (yy >= bottom - 1) return;
       const r = rankOf(pl.rp), t = TIERS[r.tier];
       scr.put(lx + 3, yy, pl.online ? '●' : '○', pl.online ? ONLINE : C.line, C.panel);
-      scr.text(lx + 5, yy, pl.name, pl.rel === 'you' ? C.bright : C.text, C.panel);
+      const hovN = ui.over(lx + 5, yy, pl.name.length, 1);
+      if (hovN) ui.hot = 'pn' + pl.name;
+      scr.text(lx + 5, yy, pl.name, hovN ? [255, 255, 255] : pl.rel === 'you' ? C.bright : C.text, hovN ? C.line : C.panel);
+      if (hovN && app.input.mouseClicked[0]) this.openProfile(pl.name);
       scr.text(lx + lw - 36, yy, `${t.g} ${r.label}`, t.col, C.panel);
       const bx = lx + lw - 15;
       if (pl.rel === 'none') { if (ui.button('add' + pl.name, bx, yy, 12, '+ ADD', { h: 1, fg: C.bright })) app.net.send({ t: 'friendAdd', name: pl.name }); }
@@ -568,7 +570,10 @@ export class Lobby {
       if (yy >= bottom - 2) return;
       const r = rankOf(f.rp), t = TIERS[r.tier];
       scr.put(rx + 3, yy, f.online ? '●' : '○', f.online ? ONLINE : C.line, C.panel);
-      scr.text(rx + 5, yy, f.name, f.online ? C.bright : C.text, C.panel);
+      const hovF = ui.over(rx + 5, yy, f.name.length, 1);
+      if (hovF) ui.hot = 'fn' + f.name;
+      scr.text(rx + 5, yy, f.name, hovF ? [255, 255, 255] : f.online ? C.bright : C.text, hovF ? C.line : C.panel);
+      if (hovF && app.input.mouseClicked[0]) this.openProfile(f.name);
       scr.text(rx + 5, yy + 1, f.ingame ? 'in a match' : f.online ? 'in the lobby' : 'offline', f.online ? ONLINE : C.line, C.panel);
       scr.text(rx + rw - 30, yy, `${t.g} ${r.label}`, t.col, C.panel);
       scr.text(rx + rw - 30, yy + 1, '★', GOLD, C.panel);
@@ -582,22 +587,59 @@ export class Lobby {
   }
   doSearch() { this.app.net.send({ t: 'search', q: (this.query || '').trim() }); }
 
+  // open another player's profile
+  openProfile(name) {
+    if (!name) return;
+    if (name.toLowerCase() === this.app.nick.toLowerCase()) { this.viewing = null; this.tab = 3; return; }
+    this.viewing = name; this.tab = 3;
+    this.app.net.send({ t: 'viewProfile', name });
+  }
+  drawProfileActions(V, rx, rw, top, bottom) {
+    const app = this.app, scr = app.scr, ui = app.ui;
+    scr.box(rx, top, rw, bottom - top, C.line, C.panel);
+    scr.text(rx + 2, top, ` ${V.name} `, C.dim, C.panel);
+    let y = top + 2;
+    if (ui.button('pback', rx + 3, y, 26, '<  MY PROFILE')) { this.viewing = null; return; }
+    y += 4;
+    const bw = Math.min(30, rw - 6);
+    if (V.rel === 'none' && ui.button('padd', rx + 3, y, bw, '+  ADD FRIEND', { fg: C.bright })) app.net.send({ t: 'friendAdd', name: V.name });
+    if (V.rel === 'incoming' && ui.button('pacc', rx + 3, y, bw, 'ACCEPT FRIEND REQUEST', { fg: ONLINE })) app.net.send({ t: 'friendAccept', name: V.name });
+    if (V.rel === 'pending') scr.text(rx + 4, y + 1, 'friend request sent · waiting…', C.dim, C.panel);
+    if (V.rel === 'friend') {
+      scr.text(rx + 4, y + 1, 'FRIEND ✓', ONLINE, C.panel);
+      if (ui.button('prm', rx + 18, y + 1, 12, 'remove', { h: 1, fg: C.line })) app.net.send({ t: 'friendRemove', name: V.name });
+    }
+    y += 5;
+    for (let i = rx + 2; i < rx + rw - 2; i++) scr.put(i, y, '-', C.line, C.panel);
+    scr.text(rx + 3, y + 2, 'BEST MATCH', C.dim, C.panel);
+    const best = (V.history || []).slice().sort((a, b) => b.k - a.k)[0];
+    scr.text(rx + 3, y + 3, best ? `${best.k} kills · ${best.d} deaths · place #${best.place}` : 'no matches yet', C.text, C.panel);
+    // refresh the relation after friend actions
+    this.viewPoll = (this.viewPoll || 0) - 1 / 60;
+    if (this.viewPoll <= 0) { this.viewPoll = 3; app.net.send({ t: 'viewProfile', name: V.name }); }
+  }
+
   // ───────── PROFILE tab ─────────
   drawProfile() {
     const app = this.app, scr = app.scr, ui = app.ui;
     const cols = scr.cols, rows = scr.rows;
     const top = 4, bottom = rows - 2;
-    const p = this.profile, r = rankOf(p.rp), tier = TIERS[r.tier];
+    const V = this.viewing && app.viewed && app.viewed.name.toLowerCase() === this.viewing.toLowerCase() ? app.viewed : null;
+    const loadingOther = this.viewing && !V;
+    const p = V || this.profile, r = rankOf(p.rp), tier = TIERS[r.tier];
+    const name = V ? V.name : app.nick;
     const lw = Math.min(64, Math.floor(cols * 0.45)), lx = 2, cx = lx + lw / 2;
     const rx = lx + lw + 3, rw = cols - rx - 2;
-    // ── left: your profile card ──
+    if (loadingOther) { scr.textC(Math.floor(rows / 2), `loading ${this.viewing}…`, C.dim); return; }
+    // ── left: profile card ──
     scr.box(lx, top, lw, bottom - top, tier.col.map(v => v * 0.5), C.panel);
-    scr.text(lx + 2, top, ' PROFILE ', C.dim, C.panel);
-    scr.textC(top + 2, app.nick, C.bright, C.panel, cx);
+    scr.text(lx + 2, top, V ? ' PLAYER PROFILE ' : ' YOUR PROFILE ', C.dim, C.panel);
+    scr.textC(top + 2, name, C.bright, C.panel, cx);
+    if (V) scr.text(lx + lw - 14, top + 2, V.online ? (V.ingame ? '● in match' : '● online') : '○ offline', V.online ? ONLINE : C.line, C.panel);
     // your character, in a frame, made of tiny symbols
     const fh = Math.max(10, Math.min(18, rows - 36)), fw = lw - 8;
     const fx = lx + 4, fy = top + 4;
-    this.drawStage('profile', scr.hole(fx + 1, fy + 1, fw - 2, fh - 2), 1 / 60);
+    this.drawStage('profile', scr.hole(fx + 1, fy + 1, fw - 2, fh - 2), 1 / 60, p.rp);
     scr.box(fx, fy, fw, fh, tier.col.map(v => v * 0.6), [12, 13, 16], false);
     let y = fy + fh + 1;
     // emblem on the left, rank text on the right
@@ -615,7 +657,7 @@ export class Lobby {
     const wr = p.matches ? Math.round(p.wins / p.matches * 100) + '%' : '-';
     const since = p.since ? new Date(p.since).toLocaleDateString() : '-';
     const rowsS = [['MATCHES', p.matches || 0], ['WINS', p.wins || 0], ['WIN RATE', wr], ['KILLS', p.kills || 0],
-      ['DEATHS', p.deaths || 0], ['K/D', kd], ['FRIENDS', (app.social && app.social.friends.length) || 0], ['PLAYING SINCE', since]];
+      ['DEATHS', p.deaths || 0], ['K/D', kd], ['FRIENDS', V ? (V.friends || 0) : ((app.social && app.social.friends.length) || 0)], ['PLAYING SINCE', since]];
     rowsS.forEach(([k, v], i) => {
       const col = i % 2, row = Math.floor(i / 2);
       const x = lx + 3 + col * Math.floor((lw - 4) / 2), w = Math.floor((lw - 4) / 2) - 3;
@@ -635,6 +677,8 @@ export class Lobby {
       const rp = (m.rp > 0 ? '+' : '') + m.rp + ' RP';
       scr.text(lx + lw - 3 - rp.length, yy, rp, m.rp > 0 ? ONLINE : [200, 80, 80], C.panel);
     });
+
+    if (V) return this.drawProfileActions(V, rx, rw, top, bottom);
 
     // ── right: notifications (friend requests + news) ──
     const soc = app.social || { requests: [], notes: [] };

@@ -125,6 +125,13 @@ function onSocial(c, m) {
   const reply = (text, ok = true) => send(c.ws, { t: 'notice', text, ok });
   switch (m.t) {
     case 'social': return send(c.ws, socialMsg(me));
+    case 'viewProfile': {
+      if (!other) return reply('player not found', false);
+      const st = statsOf(other), oc = onlineConn(key);
+      return send(c.ws, { t: 'profileView', p: { name: other.name, rp: st.rp, stars: st.stars, kills: st.kills, deaths: st.deaths,
+        wins: st.wins, matches: st.matches, since: st.since, history: st.history.slice(0, 8), friends: social(other).friends.length,
+        online: !!oc, ingame: !!(oc && oc.player), rel: relation(me, key) } });
+    }
     case 'search': {
       const q = String(m.q || '').trim().toLowerCase().slice(0, 16);
       const list = Object.keys(accounts).filter(k => !q || k.includes(q))
@@ -380,7 +387,7 @@ attach(server, '/ws', ws => {
     }
     if (!c.name) return;
 
-    if (['social', 'search', 'friendAdd', 'friendAccept', 'friendDecline', 'friendRemove'].includes(m.t)) return onSocial(c, m);
+    if (['social', 'viewProfile', 'search', 'friendAdd', 'friendAccept', 'friendDecline', 'friendRemove'].includes(m.t)) return onSocial(c, m);
     if (m.t === 'join') return joinGame(c);
     if (m.t === 'leave') return leaveGame(c);
     const p = c.player;
@@ -437,7 +444,7 @@ setInterval(() => {
 
 server.listen(PORT, () => {
   console.log('\n  ╔══════════════════════════════════════╗');
-  console.log('  ║   E I G E N G L Y P H  ·  Σ V O I D  ║');
+  console.log('  ║          E I G E N Y T H             ║');
   console.log('  ╚══════════════════════════════════════╝\n');
   console.log(`  you:      http://localhost:${PORT}`);
   for (const list of Object.values(os.networkInterfaces()))

@@ -67,7 +67,24 @@ const TEMPLATES = [
   ['L', '100100111'], ['J', '001001111'], ['F', '111100100'], ['7', '111001001'],
 ].map(([c, m]) => [c, [...m].map(Number)]);
 
+// cached wrapper: inactive icons are static, the active one re-renders ~10×/s
+const iconCache = new Map();
 export function drawItemIcon(layer, x0, y0, w, h, item, t, active, bg) {
+  const step = active ? Math.floor(t * 10) : -1;
+  const key = `${item}|${w}x${h}|${active ? 1 : 0}|${bg.join(',')}|${layer.cellW.toFixed(2)}`;
+  let c = iconCache.get(key);
+  if (!c || c.step !== step) {
+    const cells = [];
+    const rec = { cellW: layer.cellW, cellH: layer.cellH, put: (x, y, ch, fg) => cells.push([x - x0, y - y0, ch, fg]) };
+    renderItemIcon(rec, x0, y0, w, h, item, active ? step / 10 : 0, active, bg);
+    c = { step, cells };
+    iconCache.set(key, c);
+  }
+  for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) layer.put(x0 + xx, y0 + yy, ' ', null, bg);
+  for (const [x, y, ch, fg] of c.cells) if (fg) layer.put(x0 + x, y0 + y, ch, fg, bg);
+}
+
+function renderItemIcon(layer, x0, y0, w, h, item, t, active, bg) {
   const prims = [];
   const spin = active ? Math.sin(t * 1.4) * 0.35 : 0;
   let R, center, s;

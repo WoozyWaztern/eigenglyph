@@ -32,7 +32,7 @@ func findAppBrowser() string {
 }
 
 func windowProfileDir() string {
-	return filepath.Join(os.Getenv("LocalAppData"), "EIGENGLYPH", "window")
+	return filepath.Join(os.Getenv("LocalAppData"), "Eigenyth", "window")
 }
 
 func messageBox(title, text string) {

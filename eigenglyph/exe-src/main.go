@@ -193,6 +193,20 @@ func onSocial(c *conn, t string, m M) {
 	switch t {
 	case "social":
 		c.send(socialMsg(me))
+	case "viewProfile":
+		if other == nil {
+			reply("player not found", false)
+			return
+		}
+		st := statsOf(other)
+		oc := onlineConn(key)
+		h := st.History
+		if len(h) > 8 {
+			h = h[:8]
+		}
+		c.send(M{"t": "profileView", "p": M{"name": other.Name, "rp": st.RP, "stars": st.Stars, "kills": st.Kills, "deaths": st.Deaths,
+			"wins": st.Wins, "matches": st.Matches, "since": st.Since, "history": h, "friends": len(other.Friends),
+			"online": oc != nil, "ingame": oc != nil && oc.player != nil, "rel": relation(me, key)}})
 	case "search":
 		q := strings.ToLower(strings.TrimSpace(fmt.Sprint(m["q"])))
 		if q == "<nil>" {
@@ -854,7 +868,7 @@ func handle(c *conn, raw string) {
 		return
 	}
 	switch t {
-	case "social", "search", "friendAdd", "friendAccept", "friendDecline", "friendRemove":
+	case "social", "viewProfile", "search", "friendAdd", "friendAccept", "friendDecline", "friendRemove":
 		onSocial(c, t, m)
 		return
 	case "join":
@@ -1165,13 +1179,13 @@ func main() {
 				wait()
 			}
 		} else {
-			messageBox("EIGENGLYPH", fmt.Sprintf("Port %d is busy: %v", cfg.Port, err))
+			messageBox("Eigenyth", fmt.Sprintf("Port %d is busy: %v", cfg.Port, err))
 		}
 		return
 	}
 	go tick()
 	go http.Serve(ln, mux)
-	fmt.Printf("EIGENGLYPH server on %s  LAN: %v\n", url, lanAddrs())
+	fmt.Printf("Eigenyth server on %s  LAN: %v\n", url, lanAddrs())
 	if *noOpen {
 		select {}
 	}

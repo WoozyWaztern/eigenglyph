@@ -12,8 +12,8 @@ import { Game } from './game.js';
 import { Lobby } from './lobby.js';
 import { makePrim, setRotYXZ, hitPrim, HIT, BOX } from './prims.js';
 
-const TITLE = 'EIGENGLYPH';
-const SUBTITLE = 'Σ · V O I D   P R O T O C O L';
+const TITLE = 'EIGENYTH';
+const SUBTITLE = 'E V E R Y T H I N G   I S   A   S Y M B O L';
 
 class App {
   constructor() {
@@ -91,6 +91,7 @@ class App {
       case 'profile': this.profile = m.stats; break;
       case 'social': this.social = m; break;
       case 'searchRes': this.searchRes = m; break;
+      case 'profileView': this.viewed = m.p; break;
       case 'notice': this.lobby.notice = { text: m.text, t: 3, ok: m.ok }; break;
       case 'welcome':
         this.game.start(m);
@@ -140,13 +141,6 @@ class App {
     scr.clear(0, 0, 0, false);            // UI layer: see-through until drawn on
     scr.art.clear(0, 0, 0, false);        // art layer: only where something is painted
     if (this.state === 'game' && this.game.active) {
-      // auto-detail: if the PC can't keep ~30 fps, use bigger world symbols
-      this._slow = (this._slow || 0) + (dt > 0.034 ? dt : -dt * 0.5);
-      if (this._slow < 0) this._slow = 0;
-      if (this._slow > 3 && scr.detail > 1) {
-        this._slow = 0; scr.setDetail(scr.detail - 1);
-        this.game.centerMsg = { text: 'detail lowered for smoother play  ·  ESC → DETAIL', t: 3 };
-      }
       this.game.update(dt);
       this.game.draw(dt);
     } else {
@@ -239,7 +233,7 @@ class App {
     this.pass = ui.field('pass', x + 3, y + 7, w - 6, this.pass, {
       label: 'PASSWORD', max: 64, mask: true, onEnter: () => this.login(), onTab: () => { ui.focus = 'nick'; },
     });
-    if (ui.button('login', x + 3, y + 11, w - 6, 'ENTER THE VOID')) this.login();
+    if (ui.button('login', x + 3, y + 11, w - 6, 'ENTER EIGENYTH')) this.login();
     scr.textC(y + 15, 'new nickname = new account', C.dim, C.panel, x + w / 2);
     if (this.status) scr.textC(y + h + 1, this.status, this.statusErr ? C.red : C.dim);
     // ── server: play on this PC, or join a friend / online server ──
@@ -289,7 +283,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'EIGENGLYPH v1.0 · everything here is a character';
+    const r = 'Eigenyth v1.1 · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }
@@ -327,7 +321,7 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || LOCAL)) n
 syncPrefs().then(() => {
   try { window.app = new App(); }
   catch (e) {
-    document.body.innerHTML = `<pre style="color:#ccc;font:14px monospace;padding:20px">EIGENGLYPH failed to start:\n${e.message}</pre>`;
+    document.body.innerHTML = `<pre style="color:#ccc;font:14px monospace;padding:20px">Eigenyth failed to start:\n${e.message}</pre>`;
     console.error(e);
   }
 });
