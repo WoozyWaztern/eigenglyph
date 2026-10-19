@@ -61,11 +61,11 @@ export const ITEM_PARTS = [
     [CYL, M.STEEL, 0, 0.027, 0.131, 0.007, 0, 0.004, I3, 2],        // barrel tip
     [BOX, M.STEEL, 0, 0.045, 0.12, 0.003, 0.004, 0.004, I3, 2],     // front sight
     [BOX, M.STEEL, 0, 0.045, -0.05, 0.009, 0.004, 0.004, I3, 2],    // rear sight
-    [BOX, M.GRIP, 0, -0.06, -0.033, 0.0125, 0.056, 0.024, rot(0, 0.36, 0)],  // grip
+    [BOX, M.GRIP, 0, -0.0534, -0.0305, 0.0125, 0.049, 0.024, rot(0, 0.36, 0)],  // grip (short: the hand covers it)
     [BOX, M.GRIP, 0, -0.026, 0.03, 0.004, 0.003, 0.026, I3],        // trigger guard (bottom)
     [BOX, M.GRIP, 0, -0.019, 0.054, 0.004, 0.009, 0.003, I3],       // trigger guard (front)
     [BOX, M.STEEL, 0, -0.017, 0.022, 0.003, 0.008, 0.003, I3],      // trigger
-    gripped(BOX, M.GRIP, 0, -0.06, -0.033, 0.0105, 0.012, 0.02, 0.36, -0.05, 3), // magazine base plate
+    gripped(BOX, M.GRIP, 0, -0.0534, -0.0305, 0.0105, 0.006, 0.02, 0.36, -0.045, 3), // magazine base plate (flush)
   ],
   [ // 5 HUNTING KNIFE
     [BOX, M.WOOD, 0, 0, -0.075, 0.019, 0.026, 0.08, I3],            // handle
@@ -111,9 +111,9 @@ export const ITEM_PARTS = [
     [BOX, M.BLUED, 0, 0.044, -0.038, 0.008, 0.004, 0.003, I3, 2],    // rear sight
     [BOX, M.BLUED, 0, 0.026, -0.056, 0.005, 0.009, 0.005, rot(0, -0.4, 0)],   // hammer
     [BOX, M.STEEL, 0.0122, 0.028, -0.025, 0.0012, 0.005, 0.008, I3, 2],      // safety lever
-    gripped(BOX, M.BAKELITE, 0, -0.054, -0.03, 0.0125, 0.048, 0.021, 0.26, 0),   // grip panels
-    gripped(BOX, M.BLUED, 0, -0.054, -0.03, 0.0095, 0.05, 0.024, 0.26, 0),       // backstrap
-    gripped(BOX, M.BLUED, 0, -0.054, -0.03, 0.0095, 0.008, 0.019, 0.26, -0.052, 3), // magazine floor plate
+    gripped(BOX, M.BAKELITE, 0, -0.0482, -0.0285, 0.0125, 0.041, 0.021, 0.26, 0),   // grip panels
+    gripped(BOX, M.BLUED, 0, -0.0482, -0.0285, 0.0095, 0.042, 0.024, 0.26, 0),       // backstrap
+    gripped(BOX, M.BLUED, 0, -0.0482, -0.0285, 0.0095, 0.006, 0.019, 0.26, -0.038, 3), // magazine floor plate
     [BOX, M.BLUED, 0, -0.03, 0.03, 0.0035, 0.003, 0.03, I3],         // trigger guard (bottom)
     [BOX, M.BLUED, 0, -0.019, 0.061, 0.0035, 0.012, 0.003, rot(0, 0.3, 0)],  // trigger guard (front, round)
     [BOX, M.STEEL, 0, -0.018, 0.024, 0.0025, 0.009, 0.003, I3],      // trigger
@@ -129,8 +129,8 @@ export const ITEM_PARTS = [
     [BOX, M.CHROME, 0, 0.051, -0.09, 0.011, 0.005, 0.005, I3, 2],    // rear sight
     [BOX, M.CHROME, 0, 0.034, -0.11, 0.007, 0.012, 0.006, rot(0, -0.45, 0)],  // hammer
     [BOX, M.STEEL, 0.017, 0.032, -0.07, 0.0015, 0.004, 0.012, I3, 2],         // slide release / safety
-    gripped(BOX, M.RUBBER, 0, -0.072, -0.058, 0.0175, 0.066, 0.029, 0.3, 0),  // rubber grip
-    gripped(BOX, M.CHROME, 0, -0.072, -0.058, 0.012, 0.01, 0.026, 0.3, -0.068, 3), // magazine base
+    gripped(BOX, M.RUBBER, 0, -0.0634, -0.0553, 0.0175, 0.057, 0.029, 0.3, 0),  // rubber grip
+    gripped(BOX, M.CHROME, 0, -0.0634, -0.0553, 0.012, 0.007, 0.026, 0.3, -0.052, 3), // magazine base
     [BOX, M.CHROME, 0, -0.04, 0.03, 0.0045, 0.0035, 0.04, I3],       // trigger guard (bottom)
     [BOX, M.CHROME, 0, -0.026, 0.07, 0.0045, 0.016, 0.0035, I3],     // trigger guard (front, squared)
     [BOX, M.CHROME, 0, -0.045, 0.073, 0.0045, 0.004, 0.006, rot(0, 0.6, 0)],  // finger hook
@@ -141,9 +141,9 @@ export const ITEM_PARTS = [
 // where the hands go on each pistol (model units): grip center, grip tilt, grip half-width,
 // barrel height + muzzle z, view-model scale S and third-person scale
 export const PISTOLS = {
-  4:  { grip: [0, -0.06, -0.033], tilt: 0.36, gw: 0.0125, by: 0.027, mz: 0.135, S: 1.5, tp: 2.4 },
-  9:  { grip: [0, -0.054, -0.03], tilt: 0.26, gw: 0.0125, by: 0.024, mz: 0.114, S: 1.7, tp: 2.5 },
-  10: { grip: [0, -0.072, -0.058], tilt: 0.3, gw: 0.0175, by: 0.03, mz: 0.174, S: 1.12, tp: 1.9 },
+  4:  { grip: [0, -0.0534, -0.0305], hh: 0.049, tilt: 0.36, gw: 0.0125, by: 0.027, mz: 0.135, S: 1.5, tp: 2.4 },
+  9:  { grip: [0, -0.0482, -0.0285], hh: 0.042, tilt: 0.26, gw: 0.0125, by: 0.024, mz: 0.114, S: 1.7, tp: 2.5 },
+  10: { grip: [0, -0.0634, -0.0553], hh: 0.057, tilt: 0.3, gw: 0.0175, by: 0.03, mz: 0.174, S: 1.12, tp: 1.9 },
 };
 
 const tmp = new Float32Array(9);

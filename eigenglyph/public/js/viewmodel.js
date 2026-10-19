@@ -73,9 +73,17 @@ export class ViewModel {
       setDirZ(p.m, dx, dy, dz);
     };
     const hand = (x, y, z, r = 0.068) => {
-      const p = P(); p.type = SPHERE; p.mat = M.GLOVE; p.sx = r; p.tag = 0;
+      const p = P(); p.type = SPHERE; p.mat = M.ARM; p.sx = r; p.tag = 0;
       p.px = x; p.py = y; p.pz = z; p.m.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
       return [x, y, z];
+    };
+    // a closed fist wrapped around a grip: a short capsule from a to b
+    const fist = (a, b, r) => {
+      const p = P(); p.type = CAPSULE; p.mat = M.ARM; p.sx = r; p.tag = 0;
+      const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+      p.sz = Math.hypot(dx, dy, dz) / 2;
+      p.px = (a[0] + b[0]) / 2; p.py = (a[1] + b[1]) / 2; p.pz = (a[2] + b[2]) / 2;
+      setDirZ(p.m, dx, dy, dz);
     };
     const world = (pos, rot, lx, ly, lz) => [
       pos[0] + rot[0] * lx + rot[3] * ly + rot[6] * lz,
@@ -203,16 +211,21 @@ export class ViewModel {
       } else {
         // two-hand (thumbs-forward) grip: the right hand wraps the grip high under the slide,
         // the support hand wraps the right hand's fingers from the left side
-        const g = G.grip, gx = (dx, dy, dz) => world(pos, R, (g[0] + dx) * S, (g[1] + dy) * S, (g[2] + dz) * S);
-        const rh = gx(G.gw * 0.95, 0.002, -0.009);
-        hand(rh[0], rh[1], rh[2], 0.043);
+        // fingers wrap the whole (short) grip: each hand is a fist along the grip axis
+        const g = G.grip, ux = Math.cos(G.tilt), uz = Math.sin(G.tilt);
+        const gx = (dx, along, dz) => world(pos, R, (g[0] + dx) * S, (g[1] + along * ux) * S, (g[2] + along * uz + dz) * S);
+        const k = G.hh * 0.62;
+        const rh = gx(G.gw * 0.9, 0, -0.006);
+        fist(gx(G.gw * 0.9, k, -0.006), gx(G.gw * 0.9, -k, -0.006), 0.034);
         arm(rh[0], rh[1], rh[2], 0.24 + ox * 0.5, -0.46 + oy * 0.5, -0.04, 0.033);   // forearm toward the right shoulder
-        let lh = gx(-G.gw * 2.1, -0.01, 0.009);
+        let lh = gx(-G.gw * 1.3, -0.004, 0.006);
+        const lhRest = lh;
         if (rel >= 0) {
           const k = rel < 0.2 ? sm(rel / 0.2) : rel < 0.75 ? 1 : 1 - sm((rel - 0.75) / 0.25);
           lh = lerp3(lh, world(pos, R, -0.02, -0.28, -0.08), k);
         }
-        hand(lh[0], lh[1], lh[2], 0.041);
+        if (lh === lhRest) fist(gx(-G.gw * 1.3, k * 0.85, 0.006), gx(-G.gw * 1.3, -k * 0.9, 0.006), 0.032);
+        else hand(lh[0], lh[1], lh[2], 0.038);
         arm(lh[0], lh[1], lh[2], -0.16 + ox * 0.5, -0.48 + oy * 0.5, -0.04, 0.033);  // forearm toward the left shoulder
         this.muzzle = world(pos, R, 0, G.by * S, (G.mz + 0.005) * S);
       }

@@ -28,7 +28,7 @@ export const WEAPONS = {
   deagle:  { dmg: 44, cooldown: 0.58, range: 70, mag: 7, reload: 2.0, spread: 0.011, kick: 2.2 },
   hknife:  { dmg: 15, cooldown: 0.55, range: 2.6 },
   bat:     { dmg: 24, cooldown: 0.9, range: 2.9, push: 8 },
-  molotov: { count: 2, speed: 15, fireR: 2.4, fireT: 6, burnT: 3, burnDmg: 5, tick: 0.5, cooldown: 1.2 },
+  molotov: { speed: 15, fireR: 2.4, fireT: 6, burnT: 3, burnDmg: 5, tick: 0.5, cooldown: 10 },
   medkit:  { heal: 60, cooldown: 20, use: 1.4 },
 };
 
@@ -57,7 +57,7 @@ export const ITEMS = [
   { id: 'bat',     name: 'BASEBALL BAT', cat: 'melee',     kind: 'melee',   price: 120,
     desc: ['heavy wooden bat.', 'knocks players back.'] },
   { id: 'molotov', name: 'MOLOTOV',      cat: 'utility',   kind: 'throw',   price: 350,
-    desc: ['a bottle of fire.', 'sets the ground and players', 'on fire. 2 per life.'] },
+    desc: ['a bottle of fire.', 'sets the ground and players', 'on fire. unlimited bottles,', 'one every 10 seconds.'] },
   { id: 'medkit',  name: 'MEDKIT',       cat: 'utility',   kind: 'heal',    price: 250,
     desc: ['field first-aid kit.', 'restores a lot of health', 'and puts out fire.'] },
   { id: 'makarov', name: 'MAKAROV PM',   cat: 'secondary', kind: 'gun',     price: 300,
@@ -99,7 +99,7 @@ export function itemStats(id) {
     case 'deagle':  return [['DAMAGE', W.dmg, 1, '44 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.22, '100 / min'], ['RANGE', W.range, 1, 'long'], ['MAGAZINE', W.mag, 0.25, '7 rounds']];
     case 'hknife':  return [['DAMAGE', W.dmg, 0.45, '15 / slash'], ['SPEED', 1 / W.cooldown, 0.6, 'fast'], ['RANGE', W.range, 0.3, '2.6 m'], ['BLEED', 0, 0.7, 'deep cuts']];
     case 'bat':     return [['DAMAGE', W.dmg, 0.7, '24 / hit'], ['SPEED', 1 / W.cooldown, 0.35, 'slow'], ['RANGE', W.range, 0.35, '2.9 m'], ['KNOCKBACK', W.push, 0.9, 'strong']];
-    case 'molotov': return [['BURN', W.burnDmg, 0.6, '10 HP / s'], ['FIRE AREA', W.fireR, 0.7, '2.4 m'], ['FIRE TIME', W.fireT, 0.6, '6 s'], ['PER LIFE', W.count, 0.3, '2 bottles']];
+    case 'molotov': return [['BURN', W.burnDmg, 0.6, '10 HP / s'], ['FIRE AREA', W.fireR, 0.7, '2.4 m'], ['FIRE TIME', W.fireT, 0.6, '6 s'], ['COOLDOWN', W.cooldown, 0.6, '10 s · unlimited']];
     case 'medkit':  return [['HEAL', W.heal, 0.8, '+60 HP'], ['COOLDOWN', W.cooldown, 0.8, '20 s'], ['USE TIME', W.use, 0.45, '1.4 s'], ['FIRE', 0, 1, 'puts it out']];
   }
   return [];
@@ -308,7 +308,7 @@ export const MODE_INFO = {
   dm:     { name: 'DEATHMATCH', time: 300, ffa: true },
   dark:   { name: 'BLACKOUT',   time: 300, ffa: true },
   cap:    { name: 'CAPTURE Σ',  time: 360, teams: true, limit: 3 },
-  zombie: { name: 'ZOMBIES',    solo: true },
+  zombie: { name: 'ZOMBIES',    solo: true, coop: true },   // solo run, or together with the party
 };
 // CAPTURE Σ: the Σ waits on top of the core in the center, each team has a base on its side
 export const SIGMA_HOME = [24, 2, 24];

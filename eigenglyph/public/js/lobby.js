@@ -185,9 +185,9 @@ export const MODES = [
   { id: 'dark', name: 'BLACKOUT', ru: 'тьма', time: '5:00', players: '2-8 pl', ready: true,
     icon: ['  .   .  ', '    *    ', '  .   .  '],
     desc: ['total darkness. only shots', 'and flashlights give light.', 'F = your flashlight.'] },
-  { id: 'zombie', name: 'ZOMBIES', ru: 'зомби', time: 'endless', players: 'solo', ready: true,
+  { id: 'zombie', name: 'ZOMBIES', ru: 'зомби', time: 'endless', players: 'solo / party', ready: true,
     icon: ['  (x x)  ', '  /|=|\\  ', ' _/   \\_ '],
-    desc: ['hold off waves of zombies.', 'each wave: more and faster.', '+1★ a zombie · wave bonus.'] },
+    desc: ['hold off waves of zombies,', 'alone or with your party.', '+1★ a zombie · wave bonus.'] },
 ];
 
 export class Lobby {
@@ -250,7 +250,7 @@ export class Lobby {
     // while an item popup is open, clicks belong to the popup only
     const popOpen = this.popup !== null && this.popup !== undefined;
     const click = app.input.mouseClicked[0];
-    if (popOpen) app.input.mouseClicked[0] = false;
+    if (popOpen || this.invitePick) app.input.mouseClicked[0] = false;
     if (this.tab === 0) this.drawPlay(dt);
     else if (this.tab === 1) this.drawFriends(dt);
     else if (this.tab === 2) this.drawRanks();
@@ -258,6 +258,8 @@ export class Lobby {
     else if (this.tab === TAB_INV) this.drawInventory(dt);
     else this.drawProfile();
     if (popOpen) { app.input.mouseClicked[0] = click; this.drawPopup(); }
+    app.input.mouseClicked[0] = click;
+    this.drawParty();
     if (this.rankUp) this.drawRankUp(dt);
 
     // ── footer ──
@@ -280,7 +282,13 @@ export class Lobby {
   }
 
   tryPlay() {
-    const m = MODES[this.mode];
+    const m = MODES[this.mode], pa = this.app.party;
+    // in a party only the leader picks the mode; members join the leader's match
+    if (pa && pa.members.length > 1 && pa.leader !== this.app.nick) {
+      const lead = pa.members.find(x => x.leader);
+      if (lead && lead.ingame) { this.app.play(lead.ingame); return; }
+      this.notice = { text: `waiting for ${pa.leader} — the party leader starts the match`, t: 3 }; return;
+    }
     if (m.ready) this.app.play(m.id);
     else this.notice = { text: `${m.name} is still in development — try DEATHMATCH`, t: 3 };
   }
@@ -361,14 +369,28 @@ export class Lobby {
     scr.textC(bottom - 7, `${app.nick}  ·  ${tier.g} ${r.label}`, C.bright, null, midX);
     const slotW = 14, slots = 4, totalW = slots * slotW + (slots - 1) * 2;
     const px = Math.floor(midX - totalW / 2);
+    // party: you first, then the other members; empty slots invite friends
+    const pa = app.party && app.party.members.length > 1 ? app.party : null;
+    const iLead = !pa || pa.leader === app.nick;
+    const mem = pa ? [pa.members.find(x => x.name === app.nick), ...pa.members.filter(x => x.name !== app.nick)].filter(Boolean) : [{ name: app.nick, leader: true }];
     for (let i = 0; i < slots; i++) {
-      const x = px + i * (slotW + 2), on = i === 0;
-      const hov = !on && ui.over(x, bottom - 4, slotW, 3);
+      const x = px + i * (slotW + 2), M = mem[i], me = i === 0;
+      const hov = !me && ui.over(x, bottom - 4, slotW, 3);
       if (hov) ui.hot = 'slot' + i;
-      scr.box(x, bottom - 4, slotW, 3, on ? C.dim : hov ? C.dim : C.line, C.bg);
-      if (on) scr.textC(bottom - 3, app.nick.slice(0, slotW - 4), C.bright, C.bg, x + slotW / 2);
-      else scr.textC(bottom - 3, '+ invite', hov ? C.text : C.line, C.bg, x + slotW / 2);
-      if (hov && app.input.mouseClicked[0]) this.notice = { text: 'party invites are coming in the next update', t: 2.5 };
+      scr.box(x, bottom - 4, slotW, 3, M ? (M.leader && pa ? GOLD : C.dim) : hov ? C.dim : C.line, C.bg);
+      if (M) {
+        const tag = (M.leader && pa ? '★' : '') + M.name;
+        scr.textC(bottom - 3, (hov && iLead && pa ? 'kick' : tag).slice(0, slotW - 2), me ? C.bright : M.online ? C.text : C.line, C.bg, x + slotW / 2);
+        if (M.ingame) scr.textC(bottom - 4, ` ${M.ingame === 'zombie' ? 'ZOMBIES' : M.ingame.toUpperCase()} `, ONLINE, C.bg, x + slotW / 2);
+        if (hov && iLead && pa && app.input.mouseClicked[0]) app.net.send({ t: 'pkick', name: M.name });
+      } else {
+        scr.textC(bottom - 3, '+ invite', hov ? C.text : C.line, C.bg, x + slotW / 2);
+        if (hov && app.input.mouseClicked[0]) { this.invitePick = true; this.invNick = ''; app.audio.uiClick(); }
+      }
+    }
+    if (pa) {
+      scr.textC(bottom - 1, iLead ? 'you lead · your PLAY starts the match for everyone' : `${pa.leader} leads · you join their match`, C.line, null, midX);
+      if (ui.button('pleave', px + totalW + 2, bottom - 4, 9, 'leave', { h: 1, fg: C.dim, bg: C.bg })) app.net.send({ t: 'pleave' });
     }
 
     // ── right: modes ──
@@ -399,8 +421,11 @@ export class Lobby {
     const m = MODES[this.mode];
     const by = Math.min(my + 1, bottom - 6);
     const pulse = 0.6 + 0.4 * Math.sin(app.time * 3);
-    if (ui.button('play', rx, by, rightW, `P L A Y  ·  ${m.name}`, { h: 5, fg: C.bright, border: [200 * pulse + 40, 204 * pulse + 40, 212 * pulse + 40] })) this.tryPlay();
-    scr.textC(by + 6, m.id === 'zombie' ? 'solo · stars for every zombie and wave' : 'ranked · ELO changes after every match', C.line, null, rx + rightW / 2);
+    const pty = app.party && app.party.members.length > 1 ? app.party : null, follower = pty && pty.leader !== app.nick;
+    const lead = follower && pty.members.find(x => x.leader);
+    const label = follower ? (lead && lead.ingame ? `J O I N  ·  ${pty.leader}` : 'WAITING FOR LEADER') : `P L A Y  ·  ${m.name}${pty ? '  ·  PARTY' : ''}`;
+    if (ui.button('play', rx, by, rightW, label, { h: 5, fg: C.bright, border: [200 * pulse + 40, 204 * pulse + 40, 212 * pulse + 40] })) this.tryPlay();
+    scr.textC(by + 6, m.id === 'zombie' ? (pty ? 'co-op · fallen players return after each wave' : 'solo or invite friends · stars for every zombie') : 'ranked · ELO changes after every match', C.line, null, rx + rightW / 2);
   }
 
   // symbol rain + platform + character + orbiting aura of your rank symbol
@@ -767,6 +792,44 @@ export class Lobby {
     });
     return y + h;
   }
+  // ── party: invite picker + incoming invites ──
+  drawParty() {
+    const app = this.app, scr = app.scr, ui = app.ui;
+    // incoming invites: a bar under the top menu
+    const inv = (app.party && app.party.invites) || [];
+    if (inv.length && !this.invitePick) {
+      const from = inv[0], w = Math.min(scr.cols - 4, 74), x = Math.floor(scr.cols / 2 - w / 2), y = 3;
+      scr.box(x, y, w, 3, GOLD, [24, 20, 10]);
+      scr.text(x + 2, y + 1, `★ ${from} invites you to the party${inv.length > 1 ? `  (+${inv.length - 1})` : ''}`.slice(0, w - 26), GOLD, [24, 20, 10]);
+      if (ui.button('pacc', x + w - 24, y + 1, 11, 'ACCEPT', { h: 1, fg: ONLINE, bg: [24, 20, 10] })) app.net.send({ t: 'paccept', name: from });
+      if (ui.button('pdec', x + w - 12, y + 1, 11, 'DECLINE', { h: 1, fg: C.dim, bg: [24, 20, 10] })) app.net.send({ t: 'pdecline', name: from });
+    }
+    if (!this.invitePick) return;
+    const w = Math.min(52, scr.cols - 4), h = Math.min(30, scr.rows - 6);
+    const x = Math.floor(scr.cols / 2 - w / 2), y = Math.floor(scr.rows / 2 - h / 2);
+    scr.dim(0, 3, scr.cols, scr.rows - 4, 0.45);
+    scr.box(x, y, w, h, C.bright, C.panel);
+    scr.fill(x + 1, y + 1, w - 2, h - 2, ' ', null, C.panel);
+    scr.text(x + 2, y, ' INVITE TO PARTY · max 4 ', C.bright, C.panel);
+    const inParty = new Set(((app.party && app.party.members) || []).map(m => m.name));
+    const friends = ((app.social && app.social.friends) || []).filter(f => !inParty.has(f.name)).sort((a, b) => b.online - a.online);
+    scr.text(x + 2, y + 2, 'FRIENDS', C.dim, C.panel);
+    let yy = y + 3;
+    if (!friends.length) { scr.text(x + 2, yy, 'no friends yet — add them in FRIENDS,', C.line, C.panel); scr.text(x + 2, yy + 1, 'or type any online nickname below', C.line, C.panel); yy += 2; }
+    for (const f of friends.slice(0, h - 12)) {
+      scr.text(x + 2, yy, f.online ? '●' : '○', f.online ? ONLINE : C.line, C.panel);
+      scr.text(x + 4, yy, f.name, f.online ? C.text : C.line, C.panel);
+      scr.text(x + 21, yy, f.ingame ? 'in a match' : f.online ? 'online' : 'offline', C.line, C.panel);
+      if (f.online && ui.button('pinv' + f.name, x + w - 13, yy, 11, 'INVITE', { h: 1, fg: C.bright, bg: C.panel })) { app.net.send({ t: 'pinvite', name: f.name }); }
+      yy++;
+    }
+    const fy = y + h - 8;
+    this.invNick = ui.field('invnick', x + 2, fy, w - 4, this.invNick || '', { label: 'NICKNAME', max: 16, placeholder: 'any online player',
+      onEnter: () => { if (this.invNick.trim()) app.net.send({ t: 'pinvite', name: this.invNick.trim() }); this.invNick = ''; } });
+    if (ui.button('pinvnick', x + 2, fy + 3, Math.floor((w - 6) / 2), 'INVITE') && this.invNick.trim()) { app.net.send({ t: 'pinvite', name: this.invNick.trim() }); this.invNick = ''; }
+    if (ui.button('pinvclose', x + 4 + Math.floor((w - 6) / 2), fy + 3, Math.floor((w - 6) / 2), 'CLOSE') || app.input.pressed.has('Escape')) { this.invitePick = false; ui.focus = null; }
+  }
+
   // centered card with the item's stats (opened from a profile)
   drawPopup() {
     const app = this.app, scr = app.scr, ui = app.ui;

@@ -8,7 +8,7 @@ import { M } from './mats.js';
 import { C } from './ui.js';
 import { placeItem, drawItemIcon, PISTOLS } from './items.js';
 
-const SLOTS = ['SHOTGUN', 'KNIFE', 'SODA', 'AK-47', 'PISTOL', 'H.KNIFE', 'BAT', 'MOLOTOV', 'MEDKIT'];
+const SLOTS = ['SHOTGUN', 'KNIFE', 'SODA', 'AK-47', 'PISTOL', 'H.KNIFE', 'BAT', 'MOLOTOV', 'MEDKIT', 'MAKAROV', 'DEAGLE'];
 // full magazines for every gun (index → rounds)
 const fullMags = () => Object.fromEntries(WD.ITEMS.map((it, i) => [i, it.kind === 'gun' ? WD.WEAPONS[it.id].mag : 0]).filter(e => e[1]));
 const KF_ICON = { zombie: ' >(x)< ', dev: ' {dev} ', shotgun: ' =[==> ', knife: ' -|--> ', ak47: ' =|===- ', pistol: ' r=- ', makarov: ' r=- ', deagle: ' r==- ', hknife: ' =||==> ', bat: ' (====) ', fire: ' ~^~^~ ' };
@@ -75,7 +75,7 @@ export class Game {
       drink: -1, drinkCD: 0, drinkSent: false, gulps: 0,
       reload: -1, reloading: false, reloadBlend: 0, swayX: 0, swayY: 0, pumpSnd: false,
       mags: fullMags(), gunCD: 0, meleeCD: 0,
-      throwT: -1, throwSent: false, molotovs: WD.WEAPONS.molotov.count, throwCD: 0,
+      throwT: -1, throwSent: false, throwCD: 0,
       use: -1, useSent: false, medCD: 0,
     };
     // hotbar: the loadout — max 4 items, one PRIMARY / SECONDARY / MELEE / UTILITY (-1 = empty slot)
@@ -234,7 +234,7 @@ export class Game {
       case 'throw': {
         const path = WD.throwPath(m.o, m.v, null);
         this.projectiles.push({ by: m.id, o: m.o, v: m.v, t: 0, end: path.t + 0.05 });
-        if (m.id === this.myId) this.wp.molotovs = m.left;
+        if (m.id === this.myId && m.cd) this.wp.throwCD = Math.max(this.wp.throwCD, m.cd - 0.8);   // the server's cooldown
         else { const o = this.others.get(m.id); if (o) o.throwT = 0; }
         break;
       }
@@ -256,7 +256,7 @@ export class Game {
           Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0, hp: 100, dead: false, deadT: 0, slowT: 0, eyeOff: 0 });
           this.zend = null;
           const wp = this.wp; wp.ammo = 6; wp.equip = 1; wp.drinkCD = 0; wp.pump = 0; wp.pumpT = -1;
-          wp.mags = fullMags(); wp.molotovs = WD.WEAPONS.molotov.count; wp.medCD = 0; wp.throwT = -1; wp.use = -1;
+          wp.mags = fullMags(); wp.medCD = 0; wp.throwT = -1; wp.use = -1;
           me.burn = false;
           this.hurtFlash = 0;
         } else {
@@ -779,9 +779,9 @@ export class Game {
         if (before < 0.45 && wp.throwT >= 0.45) { net.send({ t: 'throw', d: this.lookDir() }); A.knife(0, 0.5); }
         if (wp.throwT >= 1) wp.throwT = -1;
       }
+      if (fire && ready && wp.throwT < 0 && wp.throwCD > 0 && inp.mouseClicked[0]) A.click();
       if (fire && ready && wp.throwT < 0 && wp.throwCD <= 0 && inp.mouseClicked[0]) {
-        if (wp.molotovs > 0) { wp.throwT = 0; wp.throwCD = WD.WEAPONS.molotov.cooldown; }
-        else A.click();
+        wp.throwT = 0; wp.throwCD = this.dev && this.dev.ammo ? 1 : WD.WEAPONS.molotov.cooldown;   // unlimited bottles, 10 s apart
       }
     }
 
@@ -1008,7 +1008,7 @@ export class Game {
         ads: wp.ads, recoil: wp.recoil, pump: wp.pump, equip: wp.equip,
         slash: wp.slash, slashSide: wp.slashSide, drink: wp.drink, reload: wp.reloading ? wp.reload : -1,
         reloadBlend: wp.reloadBlend, dead: me.dead ? me.deadT / 0.4 : 0,
-        throwT: wp.throwT, has: wp.molotovs > 0, use: wp.use,
+        throwT: wp.throwT, has: wp.throwCD <= 0, use: wp.use,
       });
     }
     app.renderer.render(scr.fine, cam, {
@@ -1218,7 +1218,7 @@ export class Game {
         if (i === 0) label = inf ? '∞' : `${'|'.repeat(wp.ammo)}${'.'.repeat(6 - wp.ammo)}`;
         if (i === 2 && wp.drinkCD > 0) label = `${wp.drinkCD.toFixed(1)}s`;
         if (WD.isGun(i)) { const m = wp.mags[i]; label = inf ? '∞' : `${m}/${WD.WEAPONS[WD.ITEMS[i].id].mag}`; if (m <= 3 && !inf) lc = C.red; }
-        if (i === 7) { label = inf ? 'x∞' : `x${wp.molotovs}`; if (!wp.molotovs && !inf) lc = C.line; }
+        if (i === 7) { label = wp.throwCD > 0 ? `${Math.ceil(wp.throwCD)}s` : 'READY'; if (wp.throwCD > 0) lc = C.line; }
         if (i === 8 && wp.medCD > 0) label = `${wp.medCD.toFixed(1)}s`;
         scr.textC(y0 + sh - 2, label, lc, bg, x + sw / 2);
       }
@@ -1263,7 +1263,11 @@ export class Game {
       if (me.deadT > 0.6) {
         scr.textC(Math.floor(rows * 0.42), '─────  Y O U   D I E D  ─────', [200, 40, 46]);
         scr.textC(Math.floor(rows * 0.42) + 2, `killed by ${me.killer}`, C.dim);
-        scr.textC(Math.floor(rows * 0.42) + 3, `respawn in ${left.toFixed(1)}`, C.dim);
+        if (this.mode !== 'zombie') scr.textC(Math.floor(rows * 0.42) + 3, `respawn in ${left.toFixed(1)}`, C.dim);
+        else {
+          const mates = [...this.others.values()].filter(o => !o.zombie && !o.dead).length;
+          if (mates && !this.zend) scr.textC(Math.floor(rows * 0.42) + 3, `${mates} teammate${mates > 1 ? 's' : ''} still fighting · you come back when the wave is cleared`, C.dim);
+        }
       }
     }
 

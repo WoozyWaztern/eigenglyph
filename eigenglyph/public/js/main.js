@@ -105,6 +105,8 @@ class App {
       case 'devset': this.devFlags = m.dev; this.game.onNet(m); break;
       case 'profile': this.profile = m.stats; this.checkRank(false); break;
       case 'social': this.social = m; break;
+      case 'party': this.party = m; break;
+      case 'pinvited': this.lobby.notice = { text: `${m.from} invites you to the party`, t: 4, ok: true }; this.audio.chat && this.audio.chat(); break;
       case 'searchRes': this.searchRes = m; break;
       case 'profileView': this.viewed = m.p; break;
       case 'notice': this.lobby.notice = { text: m.text, t: 3, ok: m.ok }; break;
@@ -138,7 +140,7 @@ class App {
     this.authRid++;                 // answers to older logins are ignored from now on
     this.net.clearQueue();
     this.isDev = false; this.devOpen = false; this.devLog = []; this.devFlags = null; this.dbWarn = null;
-    this.creds = null; this.pass = ''; this.profile = null; this.social = null; this.viewed = null; this.searchRes = null;
+    this.creds = null; this.pass = ''; this.profile = null; this.social = null; this.party = null; this.viewed = null; this.searchRes = null;
     this.pendingRank = null; this.state = 'login'; this.ui.focus = 'pass';
   }
   logout() {
@@ -372,7 +374,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'Eigenyth v1.6 · everything here is a character';
+    const r = 'Eigenyth v1.7 · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }

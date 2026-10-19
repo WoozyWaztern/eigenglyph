@@ -98,7 +98,7 @@ const MIME = {
 const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.6' })); }
+  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.7' })); }
   if (url === '/api/prefs') {   // local settings store (only for the player on this PC)
     const ra = req.socket.remoteAddress || '';
     if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) { res.writeHead(403); return res.end(); }
@@ -279,6 +279,88 @@ function onEquip(c, m) {
   reply(`${it.name} equipped · ${it.cat.toUpperCase()} slot`);
 }
 
+
+// ═════════════════════════ PARTY: up to 4 players start matches together ═════════════════════════
+const PARTY_MAX = 4;
+const partyBy = new Map();                 // account key → party { leader, members: [keys] }
+const invites = new Map();                 // invited key → Map(from key → time)
+const keyOf = c => (c && c.acc && c.name ? c.name.toLowerCase() : null);
+function partyState(key) {
+  const pa = partyBy.get(key), inv = invites.get(key);
+  const card = k => {
+    const a = accounts[k], oc = onlineConn(k);
+    return { name: a ? a.name : k, rp: a ? statsOf(a).rp : 0, leader: !!(pa && pa.leader === k), online: !!oc,
+      ingame: oc && oc.player ? oc.player.room.mode : null };
+  };
+  return { t: 'party', members: pa ? pa.members.map(card) : [], leader: pa ? (accounts[pa.leader] || {}).name : null,
+    invites: inv ? [...inv.keys()].filter(k => onlineConn(k)).map(k => (accounts[k] || {}).name || k) : [] };
+}
+function pushParty(key) { const c = onlineConn(key); if (c) send(c.ws, partyState(key)); }
+function pushPartyAll(pa) { for (const k of pa.members) pushParty(k); }
+function leaveParty(key, why) {
+  const pa = partyBy.get(key);
+  if (!pa) return;
+  pa.members = pa.members.filter(k => k !== key);
+  partyBy.delete(key);
+  if (pa.leader === key) pa.leader = pa.members[0];
+  if (pa.members.length <= 1) { for (const k of pa.members) partyBy.delete(k); }
+  for (const k of pa.members) { const oc = onlineConn(k); if (oc && why) send(oc.ws, { t: 'notice', text: why, ok: false }); pushParty(k); }
+  pushParty(key);
+}
+function dropInvitesOf(key) {
+  invites.delete(key);
+  for (const [to, m] of invites) if (m.delete(key)) pushParty(to);
+}
+function onParty(c, m) {
+  const me = keyOf(c), reply = (text, ok = true) => send(c.ws, { t: 'notice', text, ok });
+  const other = String(m.name || '').trim().toLowerCase();
+  switch (m.t) {
+    case 'party': return send(c.ws, partyState(me));
+    case 'pinvite': {
+      if (!accounts[other]) return reply('player not found', false);
+      if (other === me) return reply("you can't invite yourself", false);
+      const oc = onlineConn(other);
+      if (!oc) return reply(`${accounts[other].name} is not online`, false);
+      let pa = partyBy.get(me);
+      if (pa && pa.members.includes(other)) return reply(`${accounts[other].name} is already in your party`, false);
+      if (pa && pa.members.length >= PARTY_MAX) return reply('the party is full (4 players)', false);
+      if (!invites.has(other)) invites.set(other, new Map());
+      invites.get(other).set(me, Date.now());
+      send(oc.ws, { t: 'pinvited', from: c.name });
+      pushParty(other);
+      return reply(`invite sent to ${accounts[other].name}`);
+    }
+    case 'paccept': {
+      const inv = invites.get(me);
+      if (!inv || !inv.has(other)) return reply('this invite is no longer valid', false);
+      inv.delete(other);
+      const host = onlineConn(other);
+      if (!host) { pushParty(me); return reply('the player who invited you went offline', false); }
+      let pa = partyBy.get(other);
+      if (!pa) { pa = { leader: other, members: [other] }; partyBy.set(other, pa); }
+      if (pa.members.length >= PARTY_MAX) { pushParty(me); return reply('the party is full', false); }
+      if (partyBy.get(me) && partyBy.get(me) !== pa) leaveParty(me, `${c.name} left the party`);
+      pa.members.push(me); partyBy.set(me, pa);
+      for (const k of pa.members) if (k !== me) { const oc = onlineConn(k); if (oc) send(oc.ws, { t: 'notice', text: `${c.name} joined the party`, ok: true }); }
+      pushPartyAll(pa);
+      return reply(`you joined ${accounts[pa.leader].name}'s party · the leader starts the matches`);
+    }
+    case 'pdecline': {
+      const inv = invites.get(me); if (inv) inv.delete(other);
+      const oc = onlineConn(other); if (oc) send(oc.ws, { t: 'notice', text: `${c.name} declined the invite`, ok: false });
+      return pushParty(me);
+    }
+    case 'pleave': leaveParty(me, `${c.name} left the party`); return reply('you left the party');
+    case 'pkick': {
+      const pa = partyBy.get(me);
+      if (!pa || pa.leader !== me || !pa.members.includes(other) || other === me) return;
+      const oc = onlineConn(other); if (oc) send(oc.ws, { t: 'notice', text: 'you were removed from the party', ok: false });
+      leaveParty(other, null);
+      return reply(`${accounts[other].name} removed from the party`);
+    }
+  }
+}
+
 // ═════════════════════════ ROOMS + MATCHES ═════════════════════════
 function newRoom(id, mode) {
   const room = { id, mode, info: world.MODE_INFO[mode], players: new Map(), zombies: new Map(),
@@ -374,13 +456,20 @@ function spawn(room, p) {
   const s = pickSpawn(room, p);
   p.x = s[0]; p.y = 0; p.z = s[2]; p.yaw = yawToCenter(p.x, p.z); p.pitch = 0;
   p.hp = world.MAX_HP; p.dead = false; p.wounds = []; p.protUntil = now() + 1.5;
-  p.burnUntil = 0; p.burnBy = null; p.burnTick = 0; p.molotovs = world.WEAPONS.molotov.count; p.lastMed = -99;
+  p.burnUntil = 0; p.burnBy = null; p.burnTick = 0; p.lastMed = -99;
 }
-function joinGame(c, mode) {
+function joinGame(c, mode, pulledBy) {
   if (!ready) return;
   if (!world.MODE_INFO[mode]) mode = 'dm';
   if (c.player) leaveGame(c);
-  const room = roomFor(c, mode);
+  // party: go where a party member already plays this mode (also the same ZOMBIES run)
+  const pa = partyBy.get(keyOf(c));
+  let room = null, mate = null;
+  if (pa) for (const k of pa.members) {
+    const oc = onlineConn(k);
+    if (oc && oc !== c && oc.player && oc.player.room.mode === mode && rooms.has(oc.player.room.id)) { room = oc.player.room; mate = oc.player; break; }
+  }
+  if (!room) room = roomFor(c, mode);
   const loadout = world.loadoutOf(statsOf(c.acc));
   const first = loadout.find(i => i >= 0);
   const p = { id: nextId++, name: c.name, ws: c.ws, c, room, kills: 0, deaths: 0, team: -1, loadout,
@@ -388,7 +477,7 @@ function joinGame(c, mode) {
     lastShot: 0, lastKnife: 0, lastDrink: -99, lastChat: 0, lastFire: {}, lastMelee: 0, lastMed: -99, lastThrow: 0 };
   if (room.mode === 'cap') {
     const n = [0, 0]; for (const q of room.players.values()) n[q.team]++;
-    p.team = n[0] <= n[1] ? 0 : 1;
+    p.team = mate && mate.team >= 0 ? mate.team : n[0] <= n[1] ? 0 : 1;   // party members play in one team
   }
   spawn(room, p);
   c.player = p;
@@ -397,9 +486,15 @@ function joinGame(c, mode) {
     players: allTargets(room).map(pubPlayer), fires: room.fires.map(f => fireMsg(f)), score: room.score, wave: room.wave,
     sigma: room.mode === 'cap' ? sigmaMsg(room) : null, dev: isDevConn(c) && c.dev ? c.dev : null });
   broadcast(room, { t: 'join', p: pubPlayer(p) }, c.ws);
-  if (!room.info.solo) sys(room, `${p.name} entered the void${p.team >= 0 ? ' · team ' + world.TEAM_NAME[p.team] : ''}`);
+  if (!room.info.solo || room.players.size > 1) sys(room, `${p.name} entered the void${p.team >= 0 ? ' · team ' + world.TEAM_NAME[p.team] : ''}`);
   if (room.match.phase === 'idle') startMatch(room);
   else send(c.ws, matchInfo(room));
+  if (pulledBy) send(c.ws, { t: 'notice', text: `${pulledBy} started ${room.info.name} for the party`, ok: true });
+  // the party leader pulls everyone who waits in the lobby into the same match
+  if (pa && pa.leader === keyOf(c) && !pulledBy) {
+    for (const k of pa.members) { const oc = onlineConn(k); if (oc && oc !== c && !oc.player) joinGame(oc, mode, c.name); }
+  }
+  if (pa) pushPartyAll(pa);
 }
 function leaveGame(c) {
   const p = c.player;
@@ -409,7 +504,8 @@ function leaveGame(c) {
   room.players.delete(p.id);
   c.player = null;
   broadcast(room, { t: 'leave', id: p.id });
-  if (!room.info.solo) sys(room, `${p.name} left`);
+  if (!room.info.solo || room.players.size) sys(room, `${p.name} left`);
+  const pa = partyBy.get(keyOf(c)); if (pa) setTimeout(() => pushPartyAll(pa), 0);
   if (!room.players.size) { if (room.info.solo) rooms.delete(room.id); else { room.match.phase = 'idle'; room.zombies.clear(); } }
 }
 const owns = (p, idx) => p.loadout.includes(idx);
@@ -450,7 +546,7 @@ function damage(room, target, attacker, dmg, weapon, wounds, pts) {
   saveSoon();
   broadcast(room, { t: 'kill', victim: target.id, killer: attacker ? attacker.id : 0, w: weapon,
     vk: target.kills, vd: target.deaths, kk: attacker ? attacker.kills : 0, kd: attacker ? attacker.deaths : 0 });
-  if (room.mode === 'zombie') zombieGameOver(room);
+  if (room.mode === 'zombie') zombiePlayerDown(room, target);
 }
 
 const tmp = {};
@@ -567,15 +663,17 @@ function onMelee(p, m) {
 const fireMsg = f => ({ t: 'fire', x: r3(f.x), y: r3(f.y), z: r3(f.z), r: f.r, life: r3(Math.max(0, f.until - now())), by: f.by ? f.by.id : 0 });
 function onThrow(p, m) {
   const t = now(), w = world.ITEM_IDX.molotov, room = p.room, dev = devOf(p.c);
-  if (p.dead || !owns(p, w) || (p.molotovs <= 0 && !dev.ammo) || t - p.lastThrow < world.WEAPONS.molotov.cooldown - 0.2) return;
+  // unlimited bottles, one every 10 s (dev ammo: one per second)
+  const cd = dev.ammo ? 1 : world.WEAPONS.molotov.cooldown;
+  if (p.dead || !owns(p, w) || t - p.lastThrow < cd - 0.3) return;
   const d = norm(m.d); if (!d) return;
-  p.lastThrow = t; if (!dev.ammo) p.molotovs--;
+  p.lastThrow = t;
   const { o, v } = world.throwStart(p.x, p.y, p.z, d);
   const path = world.throwPath(o, v, (x, y, z) => {
     for (const q of allTargets(room)) if (q !== p && !q.dead && canHurt(room, p, q) && Math.hypot(x - q.x, y - (q.y + world.BODY_CY), z - q.z) < world.BODY_R + 0.1) return q;
     return null;
   });
-  broadcast(room, { t: 'throw', id: p.id, o: o.map(r3), v: v.map(r3), left: dev.ammo ? 99 : p.molotovs });
+  broadcast(room, { t: 'throw', id: p.id, o: o.map(r3), v: v.map(r3), cd });
   room.pending.push({ at: t + path.t, x: path.x, y: path.y, z: path.z, hit: path.hit, by: p });
 }
 function burn(room, target, by) {
@@ -665,7 +763,7 @@ function captureTick(room, t) {
   }
 }
 
-// ═════════════════════════ ZOMBIES (solo) ═════════════════════════
+// ═════════════════════════ ZOMBIES (solo or with the party) ═════════════════════════
 // walk grid: where a zombie can stand in every column (lowest free spot), -1 = blocked
 const STAND = new Int8Array(world.W * world.D);
 for (let z = 0; z < world.D; z++) for (let x = 0; x < world.W; x++) {
@@ -673,13 +771,16 @@ for (let z = 0; z < world.D; z++) for (let x = 0; x < world.W; x++) {
   for (let y = 0; y < 4; y++) if ((y === 0 || world.solid(x, y - 1, z)) && !world.solid(x, y, z) && !world.solid(x, y + 1, z)) { h = y; break; }
   STAND[z * world.W + x] = h;
 }
-function buildNav(room, tx, tz) {
+// flow field: distance (in cells) to the NEAREST living player
+function buildNav(room, targets) {
   const W = world.W, D = world.D, dist = room.nav || new Int16Array(W * D);
   dist.fill(-1);
   const q = new Int32Array(W * D);
   let h = 0, tl = 0;
-  const s = Math.max(0, Math.min(D - 1, Math.floor(tz))) * W + Math.max(0, Math.min(W - 1, Math.floor(tx)));
-  dist[s] = 0; q[tl++] = s;
+  for (const p of targets) {
+    const s = Math.max(0, Math.min(D - 1, Math.floor(p.z))) * W + Math.max(0, Math.min(W - 1, Math.floor(p.x)));
+    if (dist[s] < 0) { dist[s] = 0; q[tl++] = s; }
+  }
   while (h < tl) {
     const c = q[h++], cx = c % W, cz = (c / W) | 0, ch = STAND[c] < 0 ? 0 : STAND[c];
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -692,12 +793,14 @@ function buildNav(room, tx, tz) {
   }
   room.nav = dist;
 }
+const livingPlayers = room => [...room.players.values()].filter(p => !p.dead);
 function spawnZombie(room, wave) {
-  const pl = [...room.players.values()][0];
+  const pls = livingPlayers(room);
   const Z = world.zombieWave(wave);
+  // a few more zombies per wave when several players fight together
   let best = world.SPAWNS[0], bd = -1;
   for (const s of world.SPAWNS) {
-    const d = pl ? Math.hypot(s[0] - pl.x, s[2] - pl.z) : 20;
+    const d = pls.length ? Math.min(...pls.map(pl => Math.hypot(s[0] - pl.x, s[2] - pl.z))) : 20;
     const score = d > 12 ? 100 - Math.abs(d - 20) + Math.random() * 15 : d;
     if (score > bd) { bd = score; best = s; }
   }
@@ -720,43 +823,62 @@ function zombieDied(room, z, attacker, weapon) {
   setTimeout(() => { if (room.zombies.delete(z.id)) broadcast(room, { t: 'leave', id: z.id }); }, 2500);
 }
 function zombieGameOver(room) {
-  const p = [...room.players.values()][0];
-  if (!p) return;
+  if (!room.players.size) return;
   room.match.phase = 'results'; room.match.ends = now() + 9;
-  const st = statsOf(p.c.acc);
-  const best = room.wave > st.bestWave;
-  if (best) st.bestWave = room.wave;
-  st.history.unshift({ place: room.wave, mode: 'ZOMBIES', k: room.zkills, d: 1, rp: 0, wave: room.wave });
-  st.history = st.history.slice(0, 8);
-  saveSoon(); sendProfile(p.c);
-  broadcast(room, { t: 'zend', wave: room.wave, kills: room.zkills, stars: room.starsRun, best, bestWave: st.bestWave, next: 9 });
+  for (const p of room.players.values()) {
+    const st = statsOf(p.c.acc);
+    const best = room.wave > st.bestWave;
+    if (best) st.bestWave = room.wave;
+    st.history.unshift({ place: room.wave, mode: 'ZOMBIES', k: p.kills, d: 1, rp: 0, wave: room.wave });
+    st.history = st.history.slice(0, 8);
+    sendProfile(p.c);
+    send(p.ws, { t: 'zend', wave: room.wave, kills: room.zkills, stars: room.starsRun, best, bestWave: st.bestWave, next: 9, team: room.players.size });
+  }
+  saveSoon();
+}
+// a player went down: the run ends only when nobody is left standing
+function zombiePlayerDown(room, p) {
+  const left = livingPlayers(room).length;
+  if (!left) return zombieGameOver(room);
+  sys(room, `${p.name} is down · back when the wave is cleared (${left} still standing)`);
 }
 function zombieTick(room, t, dt) {
   if (room.match.phase !== 'play') return;
-  const pl = [...room.players.values()][0];
-  if (!pl) return;
+  const pls = livingPlayers(room);
+  if (!pls.length) return;
   // waves
   const alive = [...room.zombies.values()].filter(z => !z.dead).length;
   if (room.toSpawn <= 0 && alive === 0 && room.breakT === 0) {
     if (room.wave > 0) {
       const bonus = 3 * room.wave;
-      const st = statsOf(pl.c.acc); st.stars += bonus; room.starsRun += bonus; sendProfile(pl.c); saveSoon();
+      room.starsRun += bonus;
+      for (const q of room.players.values()) {
+        const st = statsOf(q.c.acc); st.stars += bonus; sendProfile(q.c);
+        if (q.dead) {      // fallen teammates come back for the next wave
+          spawn(room, q);
+          broadcast(room, { t: 'respawn', id: q.id, x: r3(q.x), y: r3(q.y), z: r3(q.z), yaw: r3(q.yaw) });
+          sys(room, `${q.name} is back`);
+        }
+      }
+      saveSoon();
       broadcast(room, { t: 'wave', wave: room.wave, cleared: true, bonus });
     }
     room.breakT = t + 6;
   }
   if (room.breakT && t > room.breakT) {
     room.breakT = 0; room.wave++;
-    room.toSpawn = world.zombieWave(room.wave).count; room.spawnT = t;
+    room.toSpawn = Math.round(world.zombieWave(room.wave).count * (1 + (room.players.size - 1) * 0.5)); room.spawnT = t;
     broadcast(room, { t: 'wave', wave: room.wave, count: room.toSpawn });
   }
   if (room.toSpawn > 0 && t > room.spawnT && alive < 14) { spawnZombie(room, room.wave); room.toSpawn--; room.spawnT = t + 0.7; }
   // the way to the player (a flow field over the map)
-  if (t > room.navT) { buildNav(room, pl.x, pl.z); room.navT = t + 0.4; }
+  if (t > room.navT) { buildNav(room, pls); room.navT = t + 0.4; }
   const W = world.W, nav = room.nav;
   const zs = [...room.zombies.values()];
   for (const z of zs) {
     if (z.dead) continue;
+    let pl = pls[0];      // chase the nearest living player
+    for (const q of pls) if (Math.hypot(q.x - z.x, q.z - z.z) < Math.hypot(pl.x - z.x, pl.z - z.z)) pl = q;
     const dx = pl.x - z.x, dz = pl.z - z.z;
     const d = Math.hypot(dx, dz);
     let gx = dx, gz = dz;
@@ -855,6 +977,7 @@ const DEV_HELP = [
   'heal · tp <x> <z>            full health · teleport (map 0..48)',
   'time <sec> · end             time left · end the match now',
   'wave <n> · spawn <n> · killall   ZOMBIES tools',
+  'kill <player>                kill a player in a match',
   'clear                        clear this panel',
 ];
 // "5000", "1.5m", "2b", "1t", "3qa", "1e100", "googol" → number
@@ -874,7 +997,7 @@ const isDevConn = c => !!(c && c.acc && c.name && c.name.toLowerCase() === DEV_N
 const NO_DEV = Object.freeze({});
 function devOf(c) { return isDevConn(c) && c.dev ? c.dev : NO_DEV; }
 // sign the connection out (logout, kick, ban, switching accounts) — leaves the match and drops every dev flag
-function signOut(c) { leaveGame(c); c.name = null; c.acc = null; c.dev = null; }
+function signOut(c) { const k = keyOf(c); leaveGame(c); if (k) { leaveParty(k, `${c.name} left the party`); dropInvitesOf(k); } c.name = null; c.acc = null; c.dev = null; }
 function kickConn(c, msg) {
   send(c.ws, { t: 'kicked', msg });
   signOut(c);
@@ -1043,7 +1166,7 @@ function onDev(c, m) {
     }
     case 'time': if (!Number.isFinite(num(a1))) return devReply(c, 'usage: time 30', false);
       room.match.ends = now() + Math.max(1, num(a1)); broadcast(room, matchInfo(room)); return devReply(c, `time left ${num(a1)} s`);
-    case 'end': if (room.mode === 'zombie') damage(room, p, null, 9999, 'dev', [], []); else endMatch(room); return devReply(c, 'match ended');
+    case 'end': if (room.mode === 'zombie') zombieGameOver(room); else endMatch(room); return devReply(c, 'match ended');
     case 'wave': if (room.mode !== 'zombie' || !Number.isFinite(num(a1))) return devReply(c, 'only in ZOMBIES: wave 10', false);
       for (const z of room.zombies.values()) broadcast(room, { t: 'leave', id: z.id });
       room.zombies.clear(); room.wave = Math.max(0, (num(a1) | 0) - 1); room.toSpawn = 0; room.breakT = now() + 0.5;
@@ -1053,6 +1176,11 @@ function onDev(c, m) {
       const n = Math.max(1, Math.min(30, num(a1) || 1));
       for (let i = 0; i < n; i++) spawnZombie(room, Math.max(1, room.wave));
       return devReply(c, `spawned ${n}`);
+    }
+    case 'kill': {
+      const k = accKey(a1), oc = k && onlineConn(k);
+      if (!oc || !oc.player) return devReply(c, 'usage: kill <player>  (the player must be in a match)', false);
+      damage(oc.player.room, oc.player, null, 99999, 'dev', [], []); return devReply(c, `killed ${oc.name}`);
     }
     case 'killall': { let n = 0; for (const z of room.zombies.values()) if (!z.dead) { damage(room, z, p, 99999, 'dev', [], []); n++; } return devReply(c, `killed ${n}`); }
   }
@@ -1094,6 +1222,7 @@ attach(server, '/ws', ws => {
         saveSoon(); created = true;
       }
       c.name = accounts[key].name; c.acc = accounts[key];
+      setTimeout(() => send(ws, partyState(key)), 50);
       return send(ws, { t: 'auth', ok: true, rid, name: c.name, created, stats: statsOf(c.acc), lan: lanAddrs(), dev: key === DEV_NAME,
         db: key === DEV_NAME ? dbStatus : undefined });
     }
@@ -1103,6 +1232,7 @@ attach(server, '/ws', ws => {
     if (m.t === 'equip' || m.t === 'unequip') return onEquip(c, m);
     if (m.t === 'dev') return onDev(c, m);
     if (['social', 'viewProfile', 'search', 'friendAdd', 'friendAccept', 'friendDecline', 'friendRemove'].includes(m.t)) return onSocial(c, m);
+    if (['party', 'pinvite', 'paccept', 'pdecline', 'pleave', 'pkick'].includes(m.t)) return onParty(c, m);
     if (m.t === 'join') return joinGame(c, m.mode);
     if (m.t === 'leave') return leaveGame(c);
     const p = c.player;
@@ -1137,7 +1267,7 @@ attach(server, '/ws', ws => {
       }
     }
   });
-  ws.on('close', () => { leaveGame(c); clients.delete(c); });
+  ws.on('close', () => { signOut(c); clients.delete(c); });
 });
 
 // ───────────── tick: snapshots, respawns, modes ─────────────
