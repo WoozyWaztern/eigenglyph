@@ -55,7 +55,7 @@ class App {
     let last = performance.now();
     const loop = now => {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
-      this.frame(dt);
+      try { this.frame(dt); } catch (e) { showError(e); }
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -346,7 +346,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'Eigenyth v1.4 · everything here is a character';
+    const r = 'Eigenyth v1.5 · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }
@@ -375,6 +375,19 @@ function syncPrefs() {
     navigator.sendBeacon ? navigator.sendBeacon('/api/prefs', JSON.stringify(all)) : fetch('/api/prefs', { method: 'POST', body: JSON.stringify(all) }).catch(() => {});
   }
 }
+
+// if anything crashes, say so on the screen instead of a frozen black window
+let errShown = false;
+function showError(e) {
+  console.error(e);
+  if (errShown) return; errShown = true;
+  const d = document.createElement('pre');
+  d.style.cssText = 'position:fixed;left:12px;bottom:12px;max-width:70vw;white-space:pre-wrap;background:#200;color:#f88;font:13px monospace;padding:10px;z-index:9;border:1px solid #a33';
+  d.textContent = 'Eigenyth error (send a screenshot of this):\n' + (e && (e.stack || e.message) || e);
+  document.body.appendChild(d);
+}
+window.addEventListener('error', ev => showError(ev.error || ev.message));
+window.addEventListener('unhandledrejection', ev => showError(ev.reason));
 
 // ── "install as app": the browser can install the game with its own window and icon ──
 window.installPrompt = null;

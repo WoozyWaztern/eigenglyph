@@ -138,6 +138,18 @@ export function emblem(tier) { return tier === FINAL ? eigenEmblem() : EMBLEMS[t
 const GLYPH_TIER = Object.fromEntries(TIERS.map((t, i) => [t.g, i]));
 // draw an emblem; in EIGEN every symbol keeps the color of its own rank
 // draw a rank emblem as a detailed picture made of tiny symbols (art layer)
+// the emblem cut out along its own outline: no box around it (UI cells are opened only where the emblem is)
+export function drawEmblemCut(scr, cx, y, tier, k = 1, w = 20, h = 9) {
+  const x = Math.floor(cx - w / 2), A = scr.ART;
+  const ax = x * A, ay = y * A, aw = w * A, ah = h * A;
+  const cells = paintArt(scr.art, ax, ay, aw, ah, 'emblem' + tier, emblemPainter(tier, TIERS), { k, bg: [6, 6, 8], cut: true });
+  for (let cyy = 0; cyy < h; cyy++) for (let cxx = 0; cxx < w; cxx++) {
+    let any = false;
+    for (let j = 0; j < A && !any; j++) for (let i = 0; i < A; i++) if (cells[(cyy * A + j) * aw + cxx * A + i]) { any = true; break; }
+    if (any) scr.hole(x + cxx, y + cyy, 1, 1);
+  }
+  return h;
+}
 export function drawEmblem(scr, cx, y, tier, k = 1, w = 20, h = 9, bg = C.panel) {
   const x = Math.floor(cx - w / 2);
   const [ax, ay, aw, ah] = scr.hole(x, y, w, h);
@@ -783,14 +795,14 @@ export class Lobby {
     const epic = R.tierUp ? 0.6 + to.tier / 8 : 0.35;
     if (R.t > 0.6 && (inp.mouseClicked[0] || inp.pressed.has('Enter') || inp.pressed.has('Escape') || inp.pressed.has('Space'))) T > 0.85 ? (this.rankUp = null) : (R.t = R.dur * 0.86);
     if (R.t >= R.dur) { this.rankUp = null; return; }
-    const fadeIn = Math.min(1, R.t / 0.4), fadeOut = Math.min(1, (R.dur - R.t) / 0.5), A = fadeIn * fadeOut;
+    const fadeIn = Math.min(1, R.t / 0.4), fadeOut = Math.max(0, Math.min(1, (R.dur - R.t) / 0.8)), A = fadeIn * fadeOut * fadeOut;
     scr.dim(0, 0, cols, rows, 1 - 0.82 * A);
     const cx = cols / 2, cy = Math.floor(rows / 2) - 4;
     const col = k => eig ? TIERS[k % FINAL].col : tier.col;
     const glyphs = eig ? TIERS.map(t => t.g) : [tier.g, tier.g, '.', '*'];
     // symbol rain — denser for higher ranks
     const rainN = Math.floor(cols * (R.tierUp ? 0.25 + to.tier * 0.06 : 0.12));
-    if (R.rain.length < rainN && Math.random() < 0.9) for (let i = 0; i < 4; i++) R.rain.push({ x: Math.random() * cols, y: -Math.random() * 10, v: 8 + Math.random() * 22 * epic, k: Math.floor(Math.random() * 9) });
+    if (R.rain.length < rainN && R.dur - R.t > 1.2) for (let i = 0; i < 4; i++) R.rain.push({ x: Math.random() * cols, y: -Math.random() * 10, v: 8 + Math.random() * 22 * epic, k: Math.floor(Math.random() * 9) });
     for (const d of R.rain) {
       d.y += d.v * dt;
       if (d.y > rows) { d.y = -2; d.x = Math.random() * cols; }
@@ -798,14 +810,15 @@ export class Lobby {
         const yy = Math.floor(d.y) - j;
         if (yy < 0 || yy >= rows) continue;
         const a = A * (1 - j / 4) * 0.55;
+        if (a < 0.06) continue;                       // fading out: leave the lobby text alone
         scr.put(Math.floor(d.x), yy, glyphs[(d.k + j) % glyphs.length], col(d.k + j).map(v => v * a));
       }
     }
     // the old emblem breaks apart, a shock wave of the new rank symbol, then the new emblem grows in
     const breakT = R.tierUp ? 0.18 : 0.12, growT = R.tierUp ? 0.34 : 0.2;
     if (R.tierUp && T < breakT) {
-      const k = 1 - T / breakT * 0.3 + Math.sin(R.t * 60) * 0.02 * T / breakT;
-      drawEmblem(scr, cx + (Math.random() - 0.5) * 2 * T / breakT, cy - 6, from.tier, k, 30, 13, [4, 4, 6]);
+      const k = (1 - T / breakT * 0.3) * fadeIn;
+      drawEmblemCut(scr, cx + Math.round((Math.random() - 0.5) * 2 * T / breakT), cy - 7, from.tier, k, 30, 13);
     }
     if (R.played === 0 && T >= breakT) {
       R.played = 1;
@@ -818,9 +831,10 @@ export class Lobby {
       app.audio.rankBoom && app.audio.rankBoom(R.tierUp ? to.tier : -1);
     }
     for (const p of R.parts) {
-      p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.97; p.vy = p.vy * 0.97 + 4 * dt;
+      p.life = Math.min(p.life - dt, R.dur - R.t - 0.2); p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.97; p.vy = p.vy * 0.97 + 4 * dt;
       if (p.life <= 0) continue;
       const a = Math.min(1, p.life) * A;
+      if (a < 0.08) continue;
       scr.put(Math.floor(p.x), Math.floor(p.y), p.ch, col(p.k).map(v => Math.min(255, v * 1.3 * a)));
     }
     if (T >= breakT) {
@@ -830,6 +844,7 @@ export class Lobby {
         const tt = (T - breakT) * (R.tierUp ? 1.6 : 2.2) - r * 0.12;
         if (tt <= 0 || tt > 1) continue;
         const rad = tt * Math.max(cols, rows * 2) * 0.55, a = (1 - tt) * A;
+        if (a < 0.08) continue;
         for (let i = 0; i < 160; i++) {
           const ang = i / 160 * Math.PI * 2;
           const x = Math.floor(cx + Math.cos(ang) * rad), y = Math.floor(cy + Math.sin(ang) * rad * 0.5);
@@ -842,16 +857,17 @@ export class Lobby {
       const big = R.tierUp ? (eig ? 40 : 32) : 26;
       const w = Math.max(6, Math.round(big * ease / 2) * 2), h = Math.max(3, Math.round(w * 0.43));
       const pulse = 1 + Math.sin(R.t * 4) * 0.08 * epic;
-      drawEmblem(scr, cx, cy - Math.floor(h / 2) - 1, to.tier, Math.min(1.25, (0.6 + ease * 0.5) * pulse), w, h, [4, 4, 6]);
+      drawEmblemCut(scr, cx, cy - Math.floor(h / 2) - 1, to.tier, Math.min(1.25, (0.6 + ease * 0.5) * pulse) * A, w, h);
       // orbiting symbols
       const orbN = R.tierUp ? 10 + to.tier * 3 : 6;
-      for (let i = 0; i < orbN; i++) {
+      for (let i = 0; i < orbN && A > 0.08; i++) {
         const ang = R.t * (0.8 + epic) + i / orbN * Math.PI * 2, rr = big * 0.75 * ease;
         scr.put(Math.floor(cx + Math.cos(ang) * rr), Math.floor(cy - 1 + Math.sin(ang) * rr * 0.4), glyphs[i % glyphs.length], col(i).map(v => v * A));
       }
       // texts
       if (T > growT) {
         const a = Math.min(1, (T - growT) * 5) * A;
+        if (a < 0.08) return;
         const yT = cy + Math.floor(big * 0.25) + 2;
         const head = R.tierUp ? (eig ? 'Λ  F I N A L   R A N K  Λ' : 'N E W   R A N K') : 'D I V I S I O N   U P';
         scr.textC(yT, head, [200, 200, 205].map(v => v * a));

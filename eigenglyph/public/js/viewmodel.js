@@ -161,13 +161,13 @@ export class ViewModel {
       const ak = st.w === 3;
       const a = sm(st.ads);
       const rel = st.reload, rl = rel >= 0 ? sm(Math.min(1, st.reloadBlend)) : 0;
-      let pos = ak ? lerp3([0.19, -0.2, 0.56], [0.0, -0.075, 0.6], a) : lerp3([0.11, -0.14, 0.44], [0.0, -0.07, 0.46], a);
+      let pos = ak ? lerp3([0.19, -0.2, 0.56], [0.0, -0.075, 0.6], a) : lerp3([0.11, -0.16, 0.52], [0.0, -0.088, 0.55], a);
       pos = lerp3(pos, ak ? [0.14, -0.19, 0.56] : [0.08, -0.13, 0.42], rl);
-      const [ay, ap] = aimAngles(pos, ak ? 0 : 0.035);
+      const [ay, ap] = aimAngles(pos, ak ? 0 : 0.05);
       const kick = st.recoil * (ak ? 0.6 : 1);
       pos[0] += ox; pos[1] += oy + kick * 0.015; pos[2] += oz - kick * (ak ? 0.04 : 0.05);
       const yaw = ay + rl * (ak ? -0.3 : -0.25);
-      const pitch = ap - kick * (ak ? 0.12 : 0.38) + eq * 0.9 - rl * 0.12;
+      const pitch = ap - kick * (ak ? 0.12 : 0.26) + eq * 0.9 - rl * 0.12;
       const roll = lerp(0.03, 0, a) + rl * (ak ? 0.5 : 0.7);
       setRotYXZ(R, yaw, pitch, roll);
       const offs = {};
@@ -183,7 +183,7 @@ export class ViewModel {
       // bolt / slide goes back on every shot (and the AK bolt is pulled after a reload)
       const pull = ak && rel > 0.82 ? Math.sin((rel - 0.82) / 0.18 * Math.PI) * 0.07 : 0;
       offs[2] = [0, 0, -(st.recoil * (ak ? 0.05 : 0.055)) - pull];
-      const S = ak ? 1 : 1.4;          // the pistol is drawn a bit bigger so the hands don't swallow it
+      const S = ak ? 1 : 1.9;          // the pistol is drawn a bit bigger so the hands don't swallow it
       n = placeItem(POOL, n, out, st.w, pos, R, S, 1, offs);
       if (ak) {
         const rh = world(pos, R, 0.0, -0.088, -0.108);
@@ -201,16 +201,17 @@ export class ViewModel {
         arm(lh[0], lh[1], lh[2], -0.05 + ox * 0.5, -0.9 + oy * 0.5, 0.28);
         this.muzzle = world(pos, R, 0, 0.0, 0.56);
       } else {
-        const rh = world(pos, R, 0.0, -0.085 * S, -0.06 * S);
-        hand(rh[0], rh[1], rh[2], 0.058);
-        arm(rh[0], rh[1], rh[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
-        let lh = world(pos, R, -0.05 * S, -0.1 * S, -0.035 * S);
+        // two-hand grip: the right hand wraps the grip, the left hand cups it from the left
+        const rh = world(pos, R, 0.012 * S, -0.058 * S, -0.042 * S);
+        hand(rh[0], rh[1], rh[2], 0.05);
+        arm(rh[0], rh[1], rh[2], 0.36 + ox * 0.5, -0.78 + oy * 0.5, 0.18, 0.055);
+        let lh = world(pos, R, -0.026 * S, -0.07 * S, -0.024 * S);
         if (rel >= 0) {
           const k = rel < 0.2 ? sm(rel / 0.2) : rel < 0.75 ? 1 : 1 - sm((rel - 0.75) / 0.25);
           lh = lerp3(lh, world(pos, R, -0.02, -0.28, -0.08), k);
         }
-        hand(lh[0], lh[1], lh[2], 0.056);
-        arm(lh[0], lh[1], lh[2], -0.25 + ox * 0.5, -0.85 + oy * 0.5, 0.2);
+        hand(lh[0], lh[1], lh[2], 0.047);
+        arm(lh[0], lh[1], lh[2], -0.2 + ox * 0.5, -0.82 + oy * 0.5, 0.26, 0.055);
         this.muzzle = world(pos, R, 0, 0.027 * S, 0.14 * S);
       }
     }
@@ -258,7 +259,7 @@ export class ViewModel {
     }
     else if (st.w === 7) {
       // ───────── MOLOTOV ─────────  (model axis z = up along the bottle)
-      const pI = [0.18, -0.2, 0.48], aI = [0.12, 1, -0.15];   // held upright, like the soda
+      const pI = [0.19, -0.21, 0.54], aI = [0.12, 1, -0.15];   // held upright, like the soda
       let pos = pI, axis = aI, show = st.has, rise = 0;
       const th = st.throwT;
       if (th >= 0) {
@@ -269,7 +270,7 @@ export class ViewModel {
       }
       pos = [pos[0] + ox, pos[1] + oy - rise, pos[2] + oz];
       setDirZ(R, axis[0], axis[1] - eq * 1.5, axis[2]);
-      if (show) n = placeItem(POOL, n, out, 7, pos, R, 1.05);
+      if (show) n = placeItem(POOL, n, out, 7, pos, R, 0.95);
       const h = show ? [pos[0] + 0.05, pos[1] - 0.015, pos[2] - 0.006] : [pos[0] + 0.03, pos[1] - 0.04, pos[2]];
       hand(h[0], h[1], h[2], 0.066);
       arm(h[0], h[1], h[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);

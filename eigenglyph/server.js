@@ -36,30 +36,41 @@ async function redis(cmd) {
   return j.result;
 }
 const savedJson = new Map();                 // key → JSON last written to the database
+let dbStatus = useDb ? 'connecting' : 'off (file data/accounts.json)';
+// put the database accounts into memory; existing objects are updated in place (online players keep theirs)
+function mergeFromDb(flat) {
+  for (let i = 0; i < flat.length; i += 2) {
+    try {
+      const obj = JSON.parse(flat[i + 1]);
+      if (accounts[flat[i]]) Object.assign(accounts[flat[i]], obj); else accounts[flat[i]] = obj;
+      savedJson.set(flat[i], flat[i + 1]);
+    } catch {}
+  }
+}
 async function loadAccounts() {
   try { accounts = JSON.parse(fs.readFileSync(ACC_FILE, 'utf8')); } catch { accounts = {}; }
   if (!useDb) { ready = true; console.log(`  accounts: ${Object.keys(accounts).length} (file data/accounts.json — set UPSTASH_REDIS_REST_URL/TOKEN to keep them on render.com)`); return; }
+  if (!/^https:\/\//.test(DB_URL)) console.log('  !!! UPSTASH_REDIS_REST_URL must be the REST URL that starts with https:// (not redis:// or rediss://)');
   for (let attempt = 1; ; attempt++) {
     try {
-      const flat = await redis(['HGETALL', DB_KEY]) || [];
-      const fromDb = {};
-      for (let i = 0; i < flat.length; i += 2) { try { fromDb[flat[i]] = JSON.parse(flat[i + 1]); savedJson.set(flat[i], flat[i + 1]); } catch {} }
-      // the database wins; accounts that exist only in the local file are uploaded
-      accounts = Object.assign(accounts, fromDb);
-      ready = true;
+      mergeFromDb(await redis(['HGETALL', DB_KEY]) || []);
+      ready = true; dbStatus = 'ok';
       console.log(`  accounts: ${Object.keys(accounts).length} (Upstash Redis database)`);
       saveSoon();
       return;
     } catch (e) {
+      dbStatus = 'error: ' + e.message;
       console.log(`  database not reachable (${e.message}) — retry ${attempt}…`);
-      await new Promise(r => setTimeout(r, Math.min(10000, 1000 * attempt)));
+      // never lock the game: after a few tries players can log in anyway, the database is retried in the background
+      if (attempt === 3 && !ready) { ready = true; console.log('  !!! starting WITHOUT the database — check UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN on render.com'); }
+      await new Promise(r => setTimeout(r, attempt < 3 ? 2000 : 30000));
     }
   }
 }
 let saving = false, saveAgain = false;
 async function saveAccounts() {
   try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(ACC_FILE, JSON.stringify(accounts)); } catch {}
-  if (!useDb || !ready) return;
+  if (!useDb || !ready || dbStatus !== 'ok') return;
   if (saving) { saveAgain = true; return; }
   saving = true;
   try {
@@ -87,7 +98,7 @@ const MIME = {
 const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (url === '/healthz') { res.writeHead(200); return res.end('ok'); }
+  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.5' })); }
   if (url === '/api/prefs') {   // local settings store (only for the player on this PC)
     const ra = req.socket.remoteAddress || '';
     if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) { res.writeHead(403); return res.end(); }
@@ -689,7 +700,7 @@ function spawnZombie(room, wave) {
     const score = d > 12 ? 100 - Math.abs(d - 20) + Math.random() * 15 : d;
     if (score > bd) { bd = score; best = s; }
   }
-  const z = { id: nextId++, name: 'zombie', zombie: true, x: best[0] + (Math.random() - 0.5), y: 0, z: best[2] + (Math.random() - 0.5), yaw: 0, pitch: 0,
+  const z = { id: nextId++, name: 'zombie', zombie: true, x: best[0] + (Math.random() - 0.5) * 0.15, y: 0, z: best[2] + (Math.random() - 0.5) * 0.15, yaw: 0, pitch: 0,
     w: -1, hp: Z.hp, maxHp: Z.hp, dead: false, wounds: [], kills: 0, deaths: 0, team: -1, speed: Z.speed * (0.85 + Math.random() * 0.3), dmg: Z.dmg,
     atkT: 0, protUntil: 0, burnUntil: 0, kx: 0, kz: 0 };
   room.zombies.set(z.id, z);
@@ -768,14 +779,36 @@ function zombieTick(room, t, dt) {
       const ox = z.x - o.x, oz = z.z - o.z, od = Math.hypot(ox, oz);
       if (od < 1.1 && od > 0.001) { gx += ox / od * (1.1 - od) * 2; gz += oz / od * (1.1 - od) * 2; }
     }
+    // keep the round body away from walls and crates (the ball is wider than its feet)
+    {
+      const by = Math.floor(z.y + 0.1), fx0 = Math.floor(z.x), fz0 = Math.floor(z.z);
+      let ax = 0, az = 0;
+      for (let oz = -1; oz <= 1; oz++) for (let ox = -1; ox <= 1; ox++) {
+        if (!ox && !oz) continue;
+        const cx = fx0 + ox, cz = fz0 + oz;
+        if (!world.solid(cx, by + 1, cz)) continue;                  // a 1-block step is fine, only real walls push
+        const px = Math.max(cx, Math.min(cx + 1, z.x)), pz = Math.max(cz, Math.min(cz + 1, z.z));   // closest point of that block
+        const ddx = z.x - px, ddz = z.z - pz, dd = Math.hypot(ddx, ddz);
+        if (dd < 0.78 && dd > 1e-4) { ax += ddx / dd * (0.78 - dd); az += ddz / dd * (0.78 - dd); }
+      }
+      gx += ax * 4; gz += az * 4;
+    }
+    // stuck for a moment? slide sideways for a bit
+    if (t > (z.chkT || 0)) {
+      const moved = Math.hypot(z.x - (z.chkX ?? z.x + 9), z.z - (z.chkZ ?? z.z));
+      if (moved < 0.3 && d > 2) { const s = Math.random() < 0.5 ? 1 : -1; z.slideX = -gz * s; z.slideZ = gx * s; z.slideT = t + 0.7; }
+      z.chkT = t + 0.8; z.chkX = z.x; z.chkZ = z.z;
+    }
+    if (z.slideT > t) { const sl = Math.hypot(z.slideX, z.slideZ) || 1, gl0 = Math.hypot(gx, gz) || 1; gx = gx / gl0 + z.slideX / sl * 1.2; gz = gz / gl0 + z.slideZ / sl * 1.2; }
     const gl = Math.hypot(gx, gz) || 1;
     const slow = z.burnUntil > t ? 0.8 : 1;
     let vx = gx / gl * z.speed * slow + z.kx, vz = gz / gl * z.speed * slow + z.kz;
     z.kx *= 0.85; z.kz *= 0.85;
     if (d < 1.25) { vx = z.kx; vz = z.kz; }
+    const inside = world.boxBlocked(z.x, z.y, z.z, 0.45);       // already overlapping a block → let it walk out
     const step = (nx, nz) => {
-      if (!world.boxBlocked(nx, z.y, nz)) return true;
-      if (!world.boxBlocked(nx, z.y + 1.01, nz) && !world.boxBlocked(z.x, z.y + 1.01, z.z)) { z.y = Math.floor(z.y + 1.01); return true; }
+      if (inside || !world.boxBlocked(nx, z.y, nz, 0.45)) return true;
+      if (!world.boxBlocked(nx, z.y + 1.01, nz, 0.45) && !world.boxBlocked(z.x, z.y + 1.01, z.z, 0.45)) { z.y = Math.floor(z.y + 1.01); return true; }
       return false;
     };
     const nx = z.x + vx * dt; if (step(nx, z.z)) z.x = nx;

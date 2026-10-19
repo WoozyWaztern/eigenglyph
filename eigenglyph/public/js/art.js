@@ -39,11 +39,12 @@ export function paintArt(layer, x0, y0, w, h, key, paint, opts = {}) {
   const k = opts.k ?? 1, bg = opts.bg || [17, 18, 21];
   for (let cy = 0; cy < h; cy++) for (let cx = 0; cx < w; cx++) {
     const c = cells[cy * w + cx];
-    if (!c) { layer.put(x0 + cx, y0 + cy, ' ', null, bg); continue; }
+    if (!c) { if (!opts.cut) layer.put(x0 + cx, y0 + cy, ' ', null, bg); continue; }   // cut: no background box
     const f = c[4] * 0.22 * k;
     layer.put(x0 + cx, y0 + cy, c[0], [c[1] * k, c[2] * k, c[3] * k],
       [bg[0] * (1 - f) + c[1] * f, bg[1] * (1 - f) + c[2] * f, bg[2] * (1 - f) + c[3] * f]);
   }
+  return cells;
 }
 
 // ───────────── rank emblems (vector drawings) ─────────────
