@@ -98,7 +98,7 @@ const MIME = {
 const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.5' })); }
+  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.6' })); }
   if (url === '/api/prefs') {   // local settings store (only for the player on this PC)
     const ra = req.socket.remoteAddress || '';
     if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) { res.writeHead(403); return res.end(); }
@@ -149,6 +149,7 @@ function statsOf(acc) {
   if (!s.since) s.since = acc.created || Date.now();
   if (!Array.isArray(s.inv)) s.inv = [];
   if (!s.loadout || typeof s.loadout !== 'object') s.loadout = { ...world.DEFAULT_LOADOUT };
+  if (!s.v16) { s.v16 = 1; if (!s.loadout.secondary) s.loadout.secondary = 'pistol'; }   // v1.6: the pistol is a starter item
   return s;
 }
 function sendProfile(c) { if (c && c.acc) send(c.ws, { t: 'profile', stats: statsOf(c.acc) }); }
@@ -394,7 +395,7 @@ function joinGame(c, mode) {
   room.players.set(p.id, p);
   send(c.ws, { t: 'welcome', id: p.id, you: pubPlayer(p), mode: room.mode, loadout,
     players: allTargets(room).map(pubPlayer), fires: room.fires.map(f => fireMsg(f)), score: room.score, wave: room.wave,
-    sigma: room.mode === 'cap' ? sigmaMsg(room) : null, dev: c.dev || null });
+    sigma: room.mode === 'cap' ? sigmaMsg(room) : null, dev: isDevConn(c) && c.dev ? c.dev : null });
   broadcast(room, { t: 'join', p: pubPlayer(p) }, c.ws);
   if (!room.info.solo) sys(room, `${p.name} entered the void${p.team >= 0 ? ' · team ' + world.TEAM_NAME[p.team] : ''}`);
   if (room.match.phase === 'idle') startMatch(room);
@@ -425,8 +426,8 @@ function damage(room, target, attacker, dmg, weapon, wounds, pts) {
   if (target.dead || room.match.phase !== 'play') return;
   if (attacker && !attacker.zombie && !room.players.has(attacker.id)) attacker = null;
   if (attacker && !canHurt(room, attacker, target)) return;
-  if (target.c && target.c.dev && target.c.dev.god && weapon !== 'dev') dmg = 0;   // dev: god mode
-  if (attacker && attacker.c && attacker.c.dev && attacker.c.dev.onehit) dmg = 9999;
+  if (target.c && devOf(target.c).god && weapon !== 'dev') dmg = 0;   // dev: god mode
+  if (attacker && attacker.c && devOf(attacker.c).onehit) dmg = 9999;
   target.hp = Math.max(0, target.hp - dmg);
   for (const w of wounds) { target.wounds.push(w); if (target.wounds.length > 28) target.wounds.shift(); }
   broadcast(room, { t: 'hit', id: target.id, by: attacker ? attacker.id : 0, dmg, hp: target.hp, w: weapon, wounds, pts });
@@ -565,7 +566,7 @@ function onMelee(p, m) {
 // ── molotov: the server flies the bottle, then the ground burns ──
 const fireMsg = f => ({ t: 'fire', x: r3(f.x), y: r3(f.y), z: r3(f.z), r: f.r, life: r3(Math.max(0, f.until - now())), by: f.by ? f.by.id : 0 });
 function onThrow(p, m) {
-  const t = now(), w = world.ITEM_IDX.molotov, room = p.room, dev = p.c.dev || {};
+  const t = now(), w = world.ITEM_IDX.molotov, room = p.room, dev = devOf(p.c);
   if (p.dead || !owns(p, w) || (p.molotovs <= 0 && !dev.ammo) || t - p.lastThrow < world.WEAPONS.molotov.cooldown - 0.2) return;
   const d = norm(m.d); if (!d) return;
   p.lastThrow = t; if (!dev.ammo) p.molotovs--;
@@ -586,7 +587,7 @@ function burn(room, target, by) {
   if (!was) target.burnTick = now() + 0.15;
 }
 function onMedkit(p) {
-  const t = now(), W = world.WEAPONS.medkit, dev = p.c.dev || {};
+  const t = now(), W = world.WEAPONS.medkit, dev = devOf(p.c);
   if (p.dead || !owns(p, world.ITEM_IDX.medkit) || (t - p.lastMed < W.cooldown - 0.5 && !dev.ammo)) return;
   p.lastMed = t;
   p.hp = Math.min(world.MAX_HP, p.hp + W.heal);
@@ -826,30 +827,35 @@ function zombieTick(room, t, dt) {
 // ═════════════════════════ DEVELOPER COMMANDS (F9, only WoozyWaztern) ═════════════════════════
 const RANK_NAMES = ['dot', 'blade', 'wave', 'shield', 'star', 'fortress', 'sigil', 'vortex', 'eigen'];
 const DEV_HELP = [
-  'help                     this list',
-  'stars <n> | stars +<n>   set / add stars',
-  'stars 1m / 2b / 1t / 1e30 / googol   huge amounts work too',
-  'elo <n> | elo +<n>       set / add ELO (EIGEN I 15000 · III 20000)',
-  'rank <name> [1-3]        dot blade wave shield star fortress sigil vortex eigen',
-  'give <item|all>          ak47 pistol hknife bat molotov medkit',
-  'take <item|all>          remove from inventory',
-  'god                      infinite health (on/off)',
-  'ammo                     infinite ammo, molotovs, medkits (on/off)',
-  'speed <x>                run speed multiplier (1 = normal)',
-  'jump <x>                 jump height multiplier',
-  'fly                      fly: Space up, Ctrl down (on/off)',
-  'onehit                   every hit kills (on/off)',
-  'heal                     full health, fire off',
-  'tp <x> <z>               teleport (map 0..48)',
-  'time <sec>               time left in the match',
-  'end                      end the match now',
-  'wave <n>                 ZOMBIES: jump to wave n',
-  'spawn <n>                ZOMBIES: spawn n zombies',
-  'killall                  kill every zombie',
-  'set <stat> <n>           kills deaths wins matches bestWave',
-  'resetstats               zero kills/deaths/wins/matches/ELO',
-  'flags                    show what is on',
-  'clear                    clear this panel',
+  'help                         this list',
+  '── YOUR account (or add a player name) ──',
+  'stars <n> | stars +<n>       set / add stars (1m 2b 1t 1e30 googol)',
+  'stars <player> <n>           …for another player',
+  'elo [player] <n|+n>          set / add ELO (EIGEN I 15000 · III 20000)',
+  'rank [player] <name> [1-3]   dot blade wave shield star fortress sigil vortex eigen',
+  'give [player] <item|all>     ak47 makarov deagle hknife bat molotov medkit',
+  'take [player] <item|all>     remove from inventory',
+  'set [player] <stat> <n>      kills deaths wins matches bestWave zkills',
+  'resetstats [player]          zero kills/deaths/wins/matches/ELO',
+  '── moderation ──',
+  'players                      who is online + where',
+  'info <player>                ELO, stars, items, loadout, ban',
+  'kick <player> [reason]       throw out (can log in again)',
+  'ban <player> [reason]        kick + block the account',
+  'unban <player> · bans        lift a ban · list bans',
+  'db                           database status (must be ok)',
+  '── cheats (only you, any mode, also mid-match) ──',
+  'god                          infinite health (on/off)',
+  'ammo                         infinite ammo, molotovs, medkits (on/off)',
+  'speed <x> · jump <x>         run speed / jump height multiplier',
+  'fly                          fly: Space up, Ctrl down (on/off)',
+  'onehit                       every hit kills (on/off)',
+  'flags · nocheats             show what is on · turn everything off',
+  '── in a match ──',
+  'heal · tp <x> <z>            full health · teleport (map 0..48)',
+  'time <sec> · end             time left · end the match now',
+  'wave <n> · spawn <n> · killall   ZOMBIES tools',
+  'clear                        clear this panel',
 ];
 // "5000", "1.5m", "2b", "1t", "3qa", "1e100", "googol" → number
 const NUM_SUFFIX = { k: 1e3, m: 1e6, b: 1e9, t: 1e12, qa: 1e15, qi: 1e18, sx: 1e21, sp: 1e24, oc: 1e27, no: 1e30, dc: 1e33 };
@@ -863,6 +869,31 @@ function bigNum(v) {
 }
 const fmtBig = n => n >= 1e15 ? n.toExponential(2) : Math.floor(n).toLocaleString('en-US');
 function devReply(c, text, ok = true) { send(c.ws, { t: 'devlog', text, ok }); }
+// cheat flags count ONLY while this connection is signed in as WoozyWaztern (never carried to another account)
+const isDevConn = c => !!(c && c.acc && c.name && c.name.toLowerCase() === DEV_NAME);
+const NO_DEV = Object.freeze({});
+function devOf(c) { return isDevConn(c) && c.dev ? c.dev : NO_DEV; }
+// sign the connection out (logout, kick, ban, switching accounts) — leaves the match and drops every dev flag
+function signOut(c) { leaveGame(c); c.name = null; c.acc = null; c.dev = null; }
+function kickConn(c, msg) {
+  send(c.ws, { t: 'kicked', msg });
+  signOut(c);
+  setTimeout(() => { try { c.ws.close(); } catch {} }, 300);
+}
+// "@Name" or "Name" → account key (or null)
+function accKey(v) { const k = String(v || '').replace(/^@/, '').trim().toLowerCase(); return k && accounts[k] ? k : null; }
+function onlineInfo(key) {
+  const oc = onlineConn(key);
+  return oc ? (oc.player ? `in match (${(world.MODE_INFO[oc.player.room.mode] || {}).name || oc.player.room.mode})` : 'online, in lobby') : 'offline';
+}
+// tell the target what happened + refresh their profile / inventory right away
+function touchTarget(key, text) {
+  const a = accounts[key]; if (!a) return;
+  note(a, text);
+  const oc = onlineConn(key);
+  if (oc) { sendProfile(oc); send(oc.ws, socialMsg(oc.acc)); send(oc.ws, { t: 'notice', text, ok: true }); }
+  saveSoon();
+}
 function onDev(c, m) {
   if (!c.acc || c.name.toLowerCase() !== DEV_NAME) return send(c.ws, { t: 'devlog', text: 'access denied', ok: false });
   const dev = c.dev || (c.dev = { god: false, ammo: false, speed: 1, jump: 1, fly: false, onehit: false });
@@ -871,38 +902,124 @@ function onDev(c, m) {
   const st = statsOf(c.acc), p = c.player, room = p && p.room;
   const num = v => Number(v);
   const pushFlags = () => send(c.ws, { t: 'devset', dev });
+  // target account: me (no name) or another player
+  const T = key => ({ key, acc: accounts[key], st: statsOf(accounts[key]), self: key === DEV_NAME });
+  const me = T(DEV_NAME);
+  const tgt = name => { const k = accKey(name); if (!k) { devReply(c, name ? `player not found: ${name}` : 'which player? (type players)', false); return null; } return T(k); };
+  const done = (target, text, tell) => {
+    if (target.self) { saveSoon(); sendProfile(c); return devReply(c, text); }
+    touchTarget(target.key, tell);
+    devReply(c, `${target.acc.name}: ${text}`);
+  };
   const toggle = (k, label) => { dev[k] = a1 === 'on' ? true : a1 === 'off' ? false : !dev[k]; pushFlags(); devReply(c, `${label}: ${dev[k] ? 'ON' : 'OFF'}`); };
   switch (cmd) {
     case 'help': case '?': for (const l of DEV_HELP) devReply(c, l); return;
-    case 'stars': {
-      const v = bigNum(a1);
-      if (!a1 || !Number.isFinite(v)) return devReply(c, 'usage: stars 500 · stars +500 · stars 1m · stars 2b · stars 1t · stars 1e30 · stars googol', false);
-      st.stars = Math.max(0, Math.floor(/^[+-]/.test(a1) ? st.stars + v : v));
-      if (!Number.isFinite(st.stars)) st.stars = 1e300;
-      saveSoon(); sendProfile(c); return devReply(c, `stars = ${fmtBig(st.stars)}`);
-    }
-    case 'elo': case 'rp': {
-      const v = bigNum(a1);
-      if (!Number.isFinite(v)) return devReply(c, 'usage: elo 15000  or  elo +500', false);
-      st.rp = Math.max(0, Math.floor(/^[+-]/.test(a1) ? st.rp + v : v)); saveSoon(); sendProfile(c); return devReply(c, `ELO = ${fmtBig(st.rp)}`);
+    // ── account commands: without a name they change YOUR account, with a name — that player's ──
+    case 'stars': case 'elo': case 'rp': {
+      const target = parts.length >= 3 ? tgt(a1) : me;
+      if (!target) return;
+      const raw = parts.length >= 3 ? a2 : a1, v = bigNum(raw);
+      const isStars = cmd === 'stars', field = isStars ? 'stars' : 'rp';
+      if (!raw || !Number.isFinite(v)) return devReply(c, isStars ? 'usage: stars 500 · stars +500 · stars 1m · stars googol · stars <player> 1b' : 'usage: elo 15000 · elo +500 · elo <player> 15000', false);
+      const s2 = target.st;
+      s2[field] = Math.max(0, Math.floor(/^[+-]/.test(raw) ? s2[field] + v : v));
+      if (!Number.isFinite(s2[field])) s2[field] = 1e300;
+      done(target, `${isStars ? 'stars' : 'ELO'} = ${fmtBig(s2[field])}`, isStars ? `admin set your stars to ${fmtBig(s2[field])} ★` : `admin set your ELO to ${fmtBig(s2[field])}`);
+      return;
     }
     case 'rank': {
-      const i = RANK_NAMES.indexOf(String(a1 || '').toLowerCase());
-      if (i < 0) return devReply(c, 'usage: rank star 2   (dot blade wave shield star fortress sigil vortex eigen + 1/2/3)', false);
-      const div = Math.max(1, Math.min(3, num(a2) || 1)) - 1;
-      st.rp = world.rankStart(i, div); saveSoon(); sendProfile(c);
-      return devReply(c, `rank ${a1.toUpperCase()} ${['I', 'II', 'III'][div]} · ELO = ${st.rp}`);
+      let target = me, rn = a1, dv = a2;
+      if (RANK_NAMES.indexOf(String(a1 || '').toLowerCase()) < 0 && a1) { target = tgt(a1); if (!target) return; rn = a2; dv = parts[3]; }
+      const i = RANK_NAMES.indexOf(String(rn || '').toLowerCase());
+      if (i < 0) return devReply(c, 'usage: rank star 2 · rank <player> eigen 3   (dot blade wave shield star fortress sigil vortex eigen)', false);
+      const div = Math.max(1, Math.min(3, num(dv) || 1)) - 1;
+      target.st.rp = world.rankStart(i, div);
+      const label = `${rn.toUpperCase()} ${['I', 'II', 'III'][div]}`;
+      done(target, `rank ${label} · ELO = ${target.st.rp}`, `admin set your rank to ${label}`);
+      return;
     }
     case 'give': case 'take': {
-      const ids = a1 === 'all' ? world.ITEMS.filter(i => !i.starter).map(i => i.id) : [a1];
+      const target = parts.length >= 3 ? tgt(a1) : me;
+      if (!target) return;
+      const what = String((parts.length >= 3 ? a2 : a1) || '').toLowerCase();
+      const ids = what === 'all' ? world.ITEMS.filter(i => !i.starter).map(i => i.id) : [what];
       const bad = ids.filter(id => !world.ITEMS.find(i => i.id === id && !i.starter));
-      if (!a1 || bad.length) return devReply(c, 'items: ak47 pistol hknife bat molotov medkit all', false);
+      if (!what || bad.length) return devReply(c, `items: ${world.ITEMS.filter(i => !i.starter).map(i => i.id).join(' ')} all   ·  give <player> <item>`, false);
+      const s2 = target.st;
       for (const id of ids) {
-        if (cmd === 'give' && !st.inv.includes(id)) st.inv.push(id);
-        if (cmd === 'take') { st.inv = st.inv.filter(x => x !== id); for (const k of Object.keys(st.loadout)) if (st.loadout[k] === id) st.loadout[k] = world.DEFAULT_LOADOUT[k]; }
+        if (cmd === 'give' && !s2.inv.includes(id)) { s2.inv.push(id); const it = world.ITEMS[world.ITEM_IDX[id]]; if (!s2.loadout[it.cat]) s2.loadout[it.cat] = id; }
+        if (cmd === 'take') { s2.inv = s2.inv.filter(x => x !== id); for (const k of Object.keys(s2.loadout)) if (s2.loadout[k] === id) s2.loadout[k] = world.DEFAULT_LOADOUT[k]; }
       }
-      saveSoon(); sendProfile(c); return devReply(c, `${cmd === 'give' ? 'given' : 'taken'}: ${ids.join(', ')}  (equip in INVENTORY, new loadout works from the next match)`);
+      const names = ids.map(id => world.ITEMS[world.ITEM_IDX[id]].name).join(', ');
+      done(target, `${cmd === 'give' ? 'given' : 'taken'}: ${names}  (works from the next match)`, cmd === 'give' ? `admin gave you: ${names}` : `admin took: ${names}`);
+      return;
     }
+    case 'set': {
+      const keys = ['kills', 'deaths', 'wins', 'matches', 'bestWave', 'zkills'];
+      let target = me, k0 = a1, v0 = a2;
+      if (parts.length >= 4) { target = tgt(a1); if (!target) return; k0 = a2; v0 = parts[3]; }
+      const k = keys.find(x => x.toLowerCase() === String(k0 || '').toLowerCase());
+      if (!k || !Number.isFinite(num(v0))) return devReply(c, 'usage: set kills 100 · set <player> wins 5   (kills deaths wins matches bestWave zkills)', false);
+      target.st[k] = Math.max(0, num(v0) | 0);
+      done(target, `${k} = ${target.st[k]}`, `admin set your ${k} to ${target.st[k]}`);
+      return;
+    }
+    case 'resetstats': {
+      const target = a1 ? tgt(a1) : me;
+      if (!target) return;
+      Object.assign(target.st, { kills: 0, deaths: 0, wins: 0, matches: 0, rp: 0, history: [] });
+      done(target, 'stats reset', 'admin reset your stats');
+      return;
+    }
+    // ── moderation ──
+    case 'players': case 'online': {
+      const list = [...clients].filter(o => o.acc);
+      devReply(c, `${list.length} signed in · ${clients.size} connections`);
+      for (const o of list) devReply(c, `  ${o.name}  ·  ${onlineInfo(o.name.toLowerCase())}  ·  ELO ${statsOf(o.acc).rp}`);
+      return;
+    }
+    case 'info': {
+      const target = tgt(a1); if (!target) return;
+      const s2 = target.st, a = target.acc;
+      devReply(c, `${a.name} · ${onlineInfo(target.key)}${a.banned ? ' · BANNED' : ''}`);
+      devReply(c, `  ELO ${s2.rp} · stars ${fmtBig(s2.stars)} · K ${s2.kills} D ${s2.deaths} · wins ${s2.wins}/${s2.matches} · best wave ${s2.bestWave}`);
+      devReply(c, `  items: ${s2.inv.join(' ') || '(starters only)'}`);
+      devReply(c, `  loadout: ${world.CATS.map(k => s2.loadout[k.id] || '-').join(' / ')}`);
+      return;
+    }
+    case 'kick': {
+      const target = tgt(a1); if (!target) return;
+      if (target.self) return devReply(c, "you can't kick yourself", false);
+      const oc = onlineConn(target.key);
+      if (!oc) return devReply(c, `${target.acc.name} is not online`, false);
+      const why = parts.slice(2).join(' ').slice(0, 80);
+      kickConn(oc, `you were kicked by the admin${why ? ': ' + why : ''}`);
+      return devReply(c, `kicked ${target.acc.name}`);
+    }
+    case 'ban': {
+      const target = tgt(a1); if (!target) return;
+      if (target.self) return devReply(c, "you can't ban yourself", false);
+      const why = parts.slice(2).join(' ').slice(0, 80);
+      target.acc.banned = { at: Date.now(), reason: why };
+      saveSoon();
+      const oc = onlineConn(target.key);
+      if (oc) kickConn(oc, `you are banned${why ? ': ' + why : ''}`);
+      return devReply(c, `banned ${target.acc.name}${oc ? ' (kicked)' : ''}`);
+    }
+    case 'unban': {
+      const target = tgt(a1); if (!target) return;
+      if (!target.acc.banned) return devReply(c, `${target.acc.name} is not banned`, false);
+      delete target.acc.banned; saveSoon();
+      return devReply(c, `unbanned ${target.acc.name}`);
+    }
+    case 'bans': {
+      const list = Object.values(accounts).filter(a => a.banned);
+      if (!list.length) return devReply(c, 'nobody is banned');
+      for (const a of list) devReply(c, `  ${a.name}${a.banned.reason ? ' · ' + a.banned.reason : ''} · ${new Date(a.banned.at).toISOString().slice(0, 10)}`);
+      return;
+    }
+    case 'db': return devReply(c, `database: ${dbStatus} · ${Object.keys(accounts).length} accounts`, dbStatus === 'ok');
+    // ── cheats: only for you, they work everywhere — lobby, any mode, in the middle of a match ──
     case 'god': return toggle('god', 'god mode');
     case 'ammo': return toggle('ammo', 'infinite ammo');
     case 'fly': return toggle('fly', 'fly');
@@ -913,13 +1030,7 @@ function onDev(c, m) {
       dev[cmd] = v; pushFlags(); return devReply(c, `${cmd} x${v}`);
     }
     case 'flags': return devReply(c, `god ${dev.god ? 'ON' : 'off'} · ammo ${dev.ammo ? 'ON' : 'off'} · fly ${dev.fly ? 'ON' : 'off'} · onehit ${dev.onehit ? 'ON' : 'off'} · speed x${dev.speed} · jump x${dev.jump}`);
-    case 'set': {
-      const keys = ['kills', 'deaths', 'wins', 'matches', 'bestWave'];
-      const k = keys.find(x => x.toLowerCase() === String(a1 || '').toLowerCase());
-      if (!k || !Number.isFinite(num(a2))) return devReply(c, 'usage: set kills 100   (kills deaths wins matches bestWave)', false);
-      st[k] = Math.max(0, num(a2) | 0); saveSoon(); sendProfile(c); return devReply(c, `${k} = ${st[k]}`);
-    }
-    case 'resetstats': Object.assign(st, { kills: 0, deaths: 0, wins: 0, matches: 0, rp: 0, history: [] }); saveSoon(); sendProfile(c); return devReply(c, 'stats reset');
+    case 'nocheats': Object.assign(dev, { god: false, ammo: false, speed: 1, jump: 1, fly: false, onehit: false }); pushFlags(); return devReply(c, 'all cheats off');
   }
   // in-match commands
   if (!p) return devReply(c, cmd ? `unknown or match-only command: ${cmd}  (type help)` : 'type help', false);
@@ -956,25 +1067,35 @@ attach(server, '/ws', ws => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (!m || typeof m.t !== 'string') return;
 
+    if (m.t === 'logout') { signOut(c); return send(ws, { t: 'loggedout', rid: m.rid }); }
     if (m.t === 'auth') {
-      if (!ready) return send(ws, { t: 'auth', ok: false, msg: 'server is starting — try again in a few seconds' });
+      const rid = Number.isFinite(m.rid) ? m.rid : 0;
+      const fail = msg => send(ws, { t: 'auth', ok: false, msg, rid });
+      if (!ready) return fail('server is starting — try again in a few seconds');
       const name = String(m.name || '').trim(), pass = String(m.pass || '');
-      if (!NAME_RE.test(name)) return send(ws, { t: 'auth', ok: false, msg: 'nickname: 3-16 letters, digits or _' });
-      if (pass.length < 3 || pass.length > 64) return send(ws, { t: 'auth', ok: false, msg: 'password: 3-64 characters' });
+      if (!NAME_RE.test(name)) return fail('nickname: 3-16 letters, digits or _');
+      if (pass.length < 3 || pass.length > 64) return fail('password: 3-64 characters');
       const key = name.toLowerCase();
-      for (const o of clients) if (o !== c && o.name && o.name.toLowerCase() === key)
-        return send(ws, { t: 'auth', ok: false, msg: 'this nickname is already online' });
+      if (c.acc && c.name.toLowerCase() !== key) signOut(c);      // switching accounts on the same connection
+      for (const o of clients) if (o !== c && o.name && o.name.toLowerCase() === key) {
+        // the same account in another tab / a dead connection that wasn't closed yet: correct password → take over
+        const a = accounts[key];
+        if (a && hashPass(pass, a.salt) === a.hash) { kickConn(o, 'you signed in somewhere else'); break; }
+        return fail('this nickname is already online');
+      }
       let created = false;
       if (accounts[key]) {
         const a = accounts[key];
-        if (hashPass(pass, a.salt) !== a.hash) return send(ws, { t: 'auth', ok: false, msg: 'wrong password' });
+        if (hashPass(pass, a.salt) !== a.hash) return fail('wrong password');
+        if (a.banned) return fail(`this account is banned${a.banned.reason ? ': ' + a.banned.reason : ''}`);
       } else {
         const salt = crypto.randomBytes(16).toString('hex');
         accounts[key] = { name, salt, hash: hashPass(pass, salt), created: Date.now() };
         saveSoon(); created = true;
       }
       c.name = accounts[key].name; c.acc = accounts[key];
-      return send(ws, { t: 'auth', ok: true, name: c.name, created, stats: statsOf(c.acc), lan: lanAddrs(), dev: key === DEV_NAME });
+      return send(ws, { t: 'auth', ok: true, rid, name: c.name, created, stats: statsOf(c.acc), lan: lanAddrs(), dev: key === DEV_NAME,
+        db: key === DEV_NAME ? dbStatus : undefined });
     }
     if (!c.name) return;
 

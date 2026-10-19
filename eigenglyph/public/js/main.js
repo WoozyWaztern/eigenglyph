@@ -32,6 +32,7 @@ class App {
     this.game = new Game(this);
     this.lobby = new Lobby(this);
     this.profile = null;
+    this.authRid = 0; this.dbWarn = null;
     this.isDev = false; this.devOpen = false; this.devLog = []; this.devInput = ''; this.devHist = []; this.devHi = -1; this.devFlags = null;
 
     this.state = 'login';
@@ -66,19 +67,28 @@ class App {
   onNet(m) {
     switch (m.t) {
       case '_open':
-        if (this.creds) this.net.send({ t: 'auth', ...this.creds, silent: true });
+        if (this.creds) this.net.send({ t: 'auth', ...this.creds, silent: true, rid: ++this.authRid });
         break;
       case '_close':
         if (this.state === 'game') { this.game.stop(); this.input.unlock(); }
         if (this.state !== 'login') { this.state = 'menu'; }
         if (this.creds) { this.status = 'connection lost — reconnecting…'; this.statusErr = true; }
         break;
+      case 'kicked':
+        if (this.state === 'game') { this.game.stop(); this.input.unlock(); }
+        this.signOutLocal();
+        this.status = m.msg || 'you were kicked'; this.statusErr = true;
+        break;
       case 'auth':
+        // only the answer to the LAST login counts (slow server: an old answer must never sign you in as another account)
+        if (m.rid !== this.authRid || !this.creds) break;
         if (m.ok) {
-          this.creds = this.creds || { name: this.nick, pass: this.pass };
+          if (m.name.toLowerCase() !== this.creds.name.toLowerCase()) break;
           this.nick = m.name; localStorage.setItem('eg_nick', m.name);
           if (m.stats) this.profile = m.stats;
           this.isDev = !!m.dev;
+          if (m.dev) this.dbWarn = m.db && m.db !== 'ok' ? m.db : null;
+          if (this.dbWarn) this.devLog.push({ text: `!! database: ${m.db} — accounts are NOT saved permanently (README: Upstash)`, ok: false });
           this.checkRank(true);
           this.lan = m.lan || [];
           this.net.send({ t: 'social' });
@@ -99,6 +109,7 @@ class App {
       case 'profileView': this.viewed = m.p; break;
       case 'notice': this.lobby.notice = { text: m.text, t: 3, ok: m.ok }; break;
       case 'welcome':
+        if (!this.creds) { this.net.send({ t: 'leave' }); break; }   // signed out meanwhile
         this.game.start(m);
         this.state = 'game';
         break;
@@ -120,12 +131,20 @@ class App {
     if (pass.length < 3) { this.status = 'password is too short'; this.statusErr = true; return; }
     this.creds = { name, pass };
     this.status = 'connecting…'; this.statusErr = false;
-    this.net.send({ t: 'auth', name, pass });
+    this.net.send({ t: 'auth', name, pass, rid: ++this.authRid });
+  }
+  // forget everything about the signed-in account on this page
+  signOutLocal() {
+    this.authRid++;                 // answers to older logins are ignored from now on
+    this.net.clearQueue();
+    this.isDev = false; this.devOpen = false; this.devLog = []; this.devFlags = null; this.dbWarn = null;
+    this.creds = null; this.pass = ''; this.profile = null; this.social = null; this.viewed = null; this.searchRes = null;
+    this.pendingRank = null; this.state = 'login'; this.ui.focus = 'pass';
   }
   logout() {
-    this.isDev = false; this.devOpen = false; this.devLog = []; this.devFlags = null;
-    this.creds = null; this.pass = ''; this.state = 'login'; this.ui.focus = 'pass';
-    this.net.ws && this.net.ws.close();
+    if (this.state === 'game') { this.game.stop(); this.input.unlock(); }
+    this.signOutLocal();
+    this.net.send({ t: 'logout' });   // the connection stays open — the server signs it out instantly
   }
   // rank went up since the last time this browser saw it → play the rank-up animation in the lobby.
   // Several ranks at once (dev: rank eigen) → only the last change is shown.
@@ -171,8 +190,13 @@ class App {
     const bg = [12, 10, 6];
     scr.box(x, y, w, h, [230, 170, 70], bg);
     scr.text(x + 2, y, ' DEVELOPER PANEL · F9 · only WoozyWaztern ', [255, 210, 120], bg);
-    const lines = this.devLog.slice(-(h - 5));
-    lines.forEach((l, i) => scr.text(x + 2, y + 1 + i, l.text.slice(0, w - 4), l.me ? [255, 220, 150] : l.ok ? [200, 205, 210] : [230, 100, 90], bg));
+    // long lines wrap onto the next row (indented)
+    const cw = w - 4, rowsOut = [];
+    for (const l of this.devLog.slice(-(h - 5))) {
+      let t = l.text, first = true;
+      while (t.length || first) { const cut = first ? cw : cw - 4; rowsOut.push([(first ? '' : '    ') + t.slice(0, cut), l]); t = t.slice(cut); first = false; }
+    }
+    rowsOut.slice(-(h - 5)).forEach(([t, l], i) => scr.text(x + 2, y + 1 + i, t, l.me ? [255, 220, 150] : l.ok ? [200, 205, 210] : [230, 100, 90], bg));
     for (let i = x + 1; i < x + w - 1; i++) scr.put(i, y + h - 3, '-', [90, 70, 40], bg);
     const n = scr.text(x + 2, y + h - 2, '> ' + this.devInput, [255, 230, 170], bg);
     if (this.time % 1 < 0.55) scr.put(x + 2 + n, y + h - 2, '_', [255, 230, 170], bg);
@@ -207,6 +231,11 @@ class App {
       else {
         if (this.pendingRank) { this.lobby.startRankUp(this.pendingRank.from, this.pendingRank.to); this.pendingRank = null; }
         this.lobby.draw(dt);
+        // only the developer sees this: the server runs without the Upstash database → accounts get wiped on restart
+        if (this.isDev && this.dbWarn) {
+          const msg = ` !! DATABASE ${this.dbWarn.toUpperCase()} — progress is NOT saved permanently · set UPSTASH vars on render.com (README) `;
+          scr.text(Math.max(0, Math.floor(scr.cols / 2 - msg.length / 2)), scr.rows - 2, msg.slice(0, scr.cols), [255, 235, 235], [150, 30, 40]);
+        }
       }
     }
     this.devPanel();
@@ -333,10 +362,7 @@ class App {
     y = Math.max(y + 2, Math.floor(scr.rows * 0.52));
     if (ui.button('play', x, y, bw, 'P L A Y', { h: 5, fg: C.bright, border: C.dim })) this.play();
     scr.textC(y + 6, `signed in as ${this.nick}`, C.dim);
-    if (ui.button('logout', x + 8, y + 8, bw - 16, 'log out', { h: 1, fg: C.dim, bg: C.bg })) {
-      this.creds = null; this.pass = ''; this.state = 'login'; this.ui.focus = 'pass';
-      this.net.ws && this.net.ws.close();
-    }
+    if (ui.button('logout', x + 8, y + 8, bw - 16, 'log out', { h: 1, fg: C.dim, bg: C.bg })) this.logout();
     if (this.status) scr.textC(y + 10, this.status, this.statusErr ? C.red : C.dim);
     this.drawFooter();
   }
@@ -346,7 +372,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'Eigenyth v1.5 · everything here is a character';
+    const r = 'Eigenyth v1.6 · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }

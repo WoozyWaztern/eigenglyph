@@ -190,6 +190,20 @@ export class Audio {
     this._tone(o, t, 'triangle', 420, 90, 0.08, 0.5);
     this._noise(o, t + 0.02, 0.3, 'lowpass', 900, 0.5, 0.15, 0.25);
   }
+  makarov(pan = 0, vol = 1) {     // sharper, drier crack of the 9x18
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol * 0.75);
+    this._noise(o, t, 0.16, 'bandpass', 3000, 0.9, 1.0, 0.1);
+    this._tone(o, t, 'square', 520, 110, 0.06, 0.35);
+    this._noise(o, t + 0.02, 0.25, 'lowpass', 1100, 0.5, 0.14, 0.2);
+  }
+  deagle(pan = 0, vol = 1) {      // .50 AE: a deep boom with a long tail
+    if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(pan, vol * 0.95);
+    this._noise(o, t, 0.35, 'lowpass', 2200, 0.6, 1.2, 0.22);
+    this._tone(o, t, 'sine', 140, 38, 0.3, 1.1);
+    this._tone(o, t, 'square', 260, 70, 0.1, 0.4);
+    this._noise(o, t + 0.04, 0.7, 'lowpass', 500, 0.4, 0.3, 0.6);
+  }
+  gun(w, pan = 0, vol = 1) { if (w === 3) this.rifle(pan, vol); else if (w === 9) this.makarov(pan, vol); else if (w === 10) this.deagle(pan, vol); else this.pistol(pan, vol); }
   magOut() {
     if (!this.ok) return; const t = this.ctx.currentTime, o = this._out(0.15, 0.8);
     this._noise(o, t, 0.06, 'bandpass', 1800, 5, 0.5, 0.05);

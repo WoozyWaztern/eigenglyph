@@ -3,7 +3,7 @@ export const M = {
   NONE: 0, CONCRETE: 1, DARK: 2, CRATE: 3, PILLAR: 4, PANEL: 5, BORDER: 6, METAL: 7, FLOOR: 8,
   BODY: 10, EYE: 11, ARM: 12, GUNMETAL: 13, WOOD: 14, BLADE: 15, CAN: 16, CAN_TOP: 17,
   SHELL: 18, GRIP: 19, BRASS: 20, DEADEYE: 21,
-  AKBLACK: 22, POLY: 23, BATWOOD: 24, GLASS: 25, RAG: 26, FLAME: 27, MEDWHITE: 28, MEDRED: 29, TAPE: 30, STEEL: 31, SIGMA: 32,
+  AKBLACK: 22, POLY: 23, BATWOOD: 24, GLASS: 25, RAG: 26, FLAME: 27, MEDWHITE: 28, MEDRED: 29, TAPE: 30, STEEL: 31, SIGMA: 32, BLUED: 33, BAKELITE: 34, CHROME: 35, RUBBER: 36, GLOVE: 37,
 };
 export const BASE = [];
 const set = (id, rgb, spec = 0) => { BASE[id] = { c: rgb, spec }; };
@@ -38,3 +38,8 @@ set(M.MEDRED,   [190, 34, 42], 0.2);
 set(M.TAPE,     [30, 30, 34], 0.05);
 set(M.STEEL,    [150, 156, 168], 0.9);
 set(M.SIGMA,    [246, 200, 84], 1.0);   // the golden Σ of CAPTURE mode
+set(M.BLUED,    [70, 76, 92], 0.95);    // blued steel of the Makarov
+set(M.BAKELITE, [104, 62, 40], 0.35);   // brown bakelite grip panels
+set(M.CHROME,   [184, 188, 198], 1.0);  // polished Desert Eagle
+set(M.RUBBER,   [38, 38, 42], 0.08);    // rubber grip
+set(M.GLOVE,    [84, 86, 96], 0.2);     // first-person hands (darker than the sleeves, so the grip reads clearly)

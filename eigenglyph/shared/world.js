@@ -24,6 +24,8 @@ export const WEAPONS = {
   soda:    { heal: 25, cooldown: 7 },
   ak47:    { dmg: 9,  cooldown: 0.105, range: 60, mag: 30, reload: 2.3, spread: 0.014, auto: true },
   pistol:  { dmg: 17, cooldown: 0.26, range: 50, mag: 12, reload: 1.45, spread: 0.008 },
+  makarov: { dmg: 21, cooldown: 0.3, range: 48, mag: 8, reload: 1.5, spread: 0.009 },
+  deagle:  { dmg: 44, cooldown: 0.58, range: 70, mag: 7, reload: 2.0, spread: 0.011, kick: 2.2 },
   hknife:  { dmg: 15, cooldown: 0.55, range: 2.6 },
   bat:     { dmg: 24, cooldown: 0.9, range: 2.9, push: 8 },
   molotov: { count: 2, speed: 15, fireR: 2.4, fireT: 6, burnT: 3, burnDmg: 5, tick: 0.5, cooldown: 1.2 },
@@ -48,7 +50,7 @@ export const ITEMS = [
     desc: ['a cold can of Σ-cola.', 'a quick sip of health.'] },
   { id: 'ak47',    name: 'DARK AK-47',   cat: 'primary',   kind: 'gun',     price: 750,
     desc: ['blackened assault rifle.', 'full-auto, 30 rounds.', 'hold the trigger.'] },
-  { id: 'pistol',  name: 'PISTOL',       cat: 'secondary', kind: 'gun',     price: 200,
+  { id: 'pistol',  name: 'PISTOL',       cat: 'secondary', kind: 'gun',     price: 0, starter: true,
     desc: ['semi-auto sidearm.', 'one click = one shot.', 'fast reload.'] },
   { id: 'hknife',  name: 'HUNTING KNIFE', cat: 'melee',    kind: 'melee',   price: 150,
     desc: ['long clip-point blade.', 'deep cuts, slower swing.'] },
@@ -58,7 +60,13 @@ export const ITEMS = [
     desc: ['a bottle of fire.', 'sets the ground and players', 'on fire. 2 per life.'] },
   { id: 'medkit',  name: 'MEDKIT',       cat: 'utility',   kind: 'heal',    price: 250,
     desc: ['field first-aid kit.', 'restores a lot of health', 'and puts out fire.'] },
+  { id: 'makarov', name: 'MAKAROV PM',   cat: 'secondary', kind: 'gun',     price: 300,
+    desc: ['soviet 9x18 pistol.', 'compact, all-steel.', '8 rounds, hits harder.'] },
+  { id: 'deagle',  name: 'DESERT EAGLE', cat: 'secondary', kind: 'gun',     price: 900,
+    desc: ['.50 AE hand cannon.', 'huge damage, 7 rounds,', 'heavy recoil.'] },
 ];
+// every gun with a magazine (AK-47 and pistols)
+export const isGun = w => !!(ITEMS[w] && ITEMS[w].kind === 'gun');
 export const ITEM_IDX = Object.fromEntries(ITEMS.map((it, i) => [it.id, i]));
 // what the player owns: starters + bought ids
 export function ownedItems(inv) {
@@ -66,7 +74,7 @@ export function ownedItems(inv) {
   return ITEMS.map((it, i) => i).filter(i => ITEMS[i].starter || set.has(ITEMS[i].id));
 }
 // what the player takes into a match: max 4 items — one PRIMARY, SECONDARY, MELEE, UTILITY
-export const DEFAULT_LOADOUT = { primary: 'shotgun', secondary: null, melee: 'knife', utility: 'soda' };
+export const DEFAULT_LOADOUT = { primary: 'shotgun', secondary: 'pistol', melee: 'knife', utility: 'soda' };
 export function loadoutOf(stats) {
   const inv = (stats && stats.inv) || [];
   const lo = Object.assign({}, DEFAULT_LOADOUT, (stats && stats.loadout) || {});
@@ -87,6 +95,8 @@ export function itemStats(id) {
     case 'soda':    return [['HEAL', W.heal, 0.3, '+25 HP'], ['COOLDOWN', W.cooldown, 0.35, '7 s'], ['USE TIME', 1.6, 0.5, '1.6 s'], ['USES', 0, 1, 'unlimited']];
     case 'ak47':    return [['DAMAGE', W.dmg, 0.3, '9 / bullet'], ['FIRE RATE', 1 / W.cooldown, 1, '570 / min'], ['RANGE', W.range, 1, 'long'], ['MAGAZINE', W.mag, 0.9, '30 rounds']];
     case 'pistol':  return [['DAMAGE', W.dmg, 0.5, '17 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.45, '230 / min'], ['RANGE', W.range, 0.8, 'medium'], ['MAGAZINE', W.mag, 0.4, '12 rounds']];
+    case 'makarov': return [['DAMAGE', W.dmg, 0.6, '21 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.4, '200 / min'], ['RANGE', W.range, 0.75, 'medium'], ['MAGAZINE', W.mag, 0.3, '8 rounds']];
+    case 'deagle':  return [['DAMAGE', W.dmg, 1, '44 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.22, '100 / min'], ['RANGE', W.range, 1, 'long'], ['MAGAZINE', W.mag, 0.25, '7 rounds']];
     case 'hknife':  return [['DAMAGE', W.dmg, 0.45, '15 / slash'], ['SPEED', 1 / W.cooldown, 0.6, 'fast'], ['RANGE', W.range, 0.3, '2.6 m'], ['BLEED', 0, 0.7, 'deep cuts']];
     case 'bat':     return [['DAMAGE', W.dmg, 0.7, '24 / hit'], ['SPEED', 1 / W.cooldown, 0.35, 'slow'], ['RANGE', W.range, 0.35, '2.9 m'], ['KNOCKBACK', W.push, 0.9, 'strong']];
     case 'molotov': return [['BURN', W.burnDmg, 0.6, '10 HP / s'], ['FIRE AREA', W.fireR, 0.7, '2.4 m'], ['FIRE TIME', W.fireT, 0.6, '6 s'], ['PER LIFE', W.count, 0.3, '2 bottles']];

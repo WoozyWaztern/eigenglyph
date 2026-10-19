@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 import { makePrim, setRotYXZ, setDirZ, mul3, SPHERE, BOX, CAPSULE, CYL } from './prims.js';
 import { M } from './mats.js';
-import { placeItem } from './items.js';
+import { placeItem, PISTOLS } from './items.js';
 
 const POOL = Array.from({ length: 40 }, makePrim);
 const R = new Float32Array(9), R2 = new Float32Array(9);
@@ -73,7 +73,7 @@ export class ViewModel {
       setDirZ(p.m, dx, dy, dz);
     };
     const hand = (x, y, z, r = 0.068) => {
-      const p = P(); p.type = SPHERE; p.mat = M.ARM; p.sx = r; p.tag = 0;
+      const p = P(); p.type = SPHERE; p.mat = M.GLOVE; p.sx = r; p.tag = 0;
       p.px = x; p.py = y; p.pz = z; p.m.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
       return [x, y, z];
     };
@@ -156,15 +156,15 @@ export class ViewModel {
       arm(h[0], h[1], h[2], 0.5 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
       this.muzzle = world(pos, R, 0, 0, 0.3);
     }
-    else if (st.w === 3 || st.w === 4) {
-      // ───────── DARK AK-47 / PISTOL ─────────
-      const ak = st.w === 3;
+    else if (st.w === 3 || PISTOLS[st.w]) {
+      // ───────── DARK AK-47 / PISTOLS (pistol, Makarov, Desert Eagle) ─────────
+      const ak = st.w === 3, G = PISTOLS[st.w], heavy = st.w === 10;
       const a = sm(st.ads);
       const rel = st.reload, rl = rel >= 0 ? sm(Math.min(1, st.reloadBlend)) : 0;
-      let pos = ak ? lerp3([0.19, -0.2, 0.56], [0.0, -0.075, 0.6], a) : lerp3([0.11, -0.16, 0.52], [0.0, -0.088, 0.55], a);
+      let pos = ak ? lerp3([0.19, -0.2, 0.56], [0.0, -0.075, 0.6], a) : lerp3([0.14, -0.115, 0.52], [0.0, -0.07, 0.52], a);
       pos = lerp3(pos, ak ? [0.14, -0.19, 0.56] : [0.08, -0.13, 0.42], rl);
-      const [ay, ap] = aimAngles(pos, ak ? 0 : 0.05);
-      const kick = st.recoil * (ak ? 0.6 : 1);
+      const [ay, ap] = aimAngles(pos, ak ? 0 : G.by * G.S);
+      const kick = st.recoil * (ak ? 0.6 : heavy ? 1.7 : 1);
       pos[0] += ox; pos[1] += oy + kick * 0.015; pos[2] += oz - kick * (ak ? 0.04 : 0.05);
       const yaw = ay + rl * (ak ? -0.3 : -0.25);
       const pitch = ap - kick * (ak ? 0.12 : 0.26) + eq * 0.9 - rl * 0.12;
@@ -183,7 +183,7 @@ export class ViewModel {
       // bolt / slide goes back on every shot (and the AK bolt is pulled after a reload)
       const pull = ak && rel > 0.82 ? Math.sin((rel - 0.82) / 0.18 * Math.PI) * 0.07 : 0;
       offs[2] = [0, 0, -(st.recoil * (ak ? 0.05 : 0.055)) - pull];
-      const S = ak ? 1 : 1.9;          // the pistol is drawn a bit bigger so the hands don't swallow it
+      const S = ak ? 1 : G.S;          // pistols are drawn a bit bigger so the hands don't swallow them
       n = placeItem(POOL, n, out, st.w, pos, R, S, 1, offs);
       if (ak) {
         const rh = world(pos, R, 0.0, -0.088, -0.108);
@@ -201,18 +201,20 @@ export class ViewModel {
         arm(lh[0], lh[1], lh[2], -0.05 + ox * 0.5, -0.9 + oy * 0.5, 0.28);
         this.muzzle = world(pos, R, 0, 0.0, 0.56);
       } else {
-        // two-hand grip: the right hand wraps the grip, the left hand cups it from the left
-        const rh = world(pos, R, 0.012 * S, -0.058 * S, -0.042 * S);
-        hand(rh[0], rh[1], rh[2], 0.05);
-        arm(rh[0], rh[1], rh[2], 0.36 + ox * 0.5, -0.78 + oy * 0.5, 0.18, 0.055);
-        let lh = world(pos, R, -0.026 * S, -0.07 * S, -0.024 * S);
+        // two-hand (thumbs-forward) grip: the right hand wraps the grip high under the slide,
+        // the support hand wraps the right hand's fingers from the left side
+        const g = G.grip, gx = (dx, dy, dz) => world(pos, R, (g[0] + dx) * S, (g[1] + dy) * S, (g[2] + dz) * S);
+        const rh = gx(G.gw * 0.95, 0.002, -0.009);
+        hand(rh[0], rh[1], rh[2], 0.043);
+        arm(rh[0], rh[1], rh[2], 0.24 + ox * 0.5, -0.46 + oy * 0.5, -0.04, 0.033);   // forearm toward the right shoulder
+        let lh = gx(-G.gw * 2.1, -0.01, 0.009);
         if (rel >= 0) {
           const k = rel < 0.2 ? sm(rel / 0.2) : rel < 0.75 ? 1 : 1 - sm((rel - 0.75) / 0.25);
           lh = lerp3(lh, world(pos, R, -0.02, -0.28, -0.08), k);
         }
-        hand(lh[0], lh[1], lh[2], 0.047);
-        arm(lh[0], lh[1], lh[2], -0.2 + ox * 0.5, -0.82 + oy * 0.5, 0.26, 0.055);
-        this.muzzle = world(pos, R, 0, 0.027 * S, 0.14 * S);
+        hand(lh[0], lh[1], lh[2], 0.041);
+        arm(lh[0], lh[1], lh[2], -0.16 + ox * 0.5, -0.48 + oy * 0.5, -0.04, 0.033);  // forearm toward the left shoulder
+        this.muzzle = world(pos, R, 0, G.by * S, (G.mz + 0.005) * S);
       }
     }
     else if (st.w === 5) {
@@ -239,7 +241,7 @@ export class ViewModel {
     }
     else if (st.w === 6) {
       // ───────── BASEBALL BAT ─────────  (grip point + direction of the bat)
-      const gI = [0.25, -0.3, 0.46], dI = [-0.2, 1, 0.42];
+      const gI = [0.14, -0.16, 0.47], dI = [0.6, 1, 0.05];   // ready stance: bat up over the right shoulder
       let g = gI, d = dI;
       if (st.slash >= 0) {
         const s = st.slash, side = st.slashSide;
@@ -249,12 +251,13 @@ export class ViewModel {
       }
       g = [g[0] + ox, g[1] + oy, g[2] + oz];
       setDirZ(R, d[0], d[1] - eq * 1.4, d[2]);
-      const pos = world(g, R, 0, 0, 0.24);
-      n = placeItem(POOL, n, out, 6, pos, R, 1.15);
-      const rh = world(pos, R, 0, 0, -0.22), lh = world(pos, R, 0, 0, -0.29);
-      hand(rh[0], rh[1], rh[2], 0.07); hand(lh[0], lh[1], lh[2], 0.07);
-      arm(rh[0], rh[1], rh[2], 0.55 + ox * 0.5, -0.72 + oy * 0.5, 0.1);
-      arm(lh[0], lh[1], lh[2], 0.05 + ox * 0.5, -0.85 + oy * 0.5, 0.2);
+      // both hands on the taped handle, stacked and touching: left hand at the knob, right hand above it
+      const pos = world(g, R, 0, 0, 0.25);
+      n = placeItem(POOL, n, out, 6, pos, R, 1.0);
+      const rh = world(pos, R, 0, 0, -0.17), lh = world(pos, R, 0, 0, -0.255);
+      hand(rh[0], rh[1], rh[2], 0.044); hand(lh[0], lh[1], lh[2], 0.044);
+      arm(rh[0], rh[1], rh[2], 0.3 + ox * 0.5, -0.5 + oy * 0.5, -0.02, 0.035);
+      arm(lh[0], lh[1], lh[2], -0.14 + ox * 0.5, -0.52 + oy * 0.5, -0.02, 0.035);
       this.muzzle = world(pos, R, 0, 0, 0.45);
     }
     else if (st.w === 7) {

@@ -9,6 +9,11 @@ import { M, BASE } from './mats.js';
 
 const rot = (yaw, pitch, roll) => { const m = new Float32Array(9); setRotYXZ(m, yaw, pitch, roll); return m; };
 const I3 = rot(0, 0, 0);
+// a part that sits inside a tilted pistol grip: same tilt, center moved by dy along the grip's own axis
+function gripped(type, mat, cx, cy, cz, a, b, c, pitch, dy, tag) {
+  const m = rot(0, pitch, 0);
+  return [type, mat, cx + m[3] * dy, cy + m[4] * dy, cz + m[5] * dy, a, b, c, m, tag];
+}
 
 // [type, mat, x, y, z, sx, sy, sz, localRotation, tag]
 export const ITEM_PARTS = [
@@ -60,6 +65,7 @@ export const ITEM_PARTS = [
     [BOX, M.GRIP, 0, -0.026, 0.03, 0.004, 0.003, 0.026, I3],        // trigger guard (bottom)
     [BOX, M.GRIP, 0, -0.019, 0.054, 0.004, 0.009, 0.003, I3],       // trigger guard (front)
     [BOX, M.STEEL, 0, -0.017, 0.022, 0.003, 0.008, 0.003, I3],      // trigger
+    gripped(BOX, M.GRIP, 0, -0.06, -0.033, 0.0105, 0.012, 0.02, 0.36, -0.05, 3), // magazine base plate
   ],
   [ // 5 HUNTING KNIFE
     [BOX, M.WOOD, 0, 0, -0.075, 0.019, 0.026, 0.08, I3],            // handle
@@ -96,7 +102,49 @@ export const ITEM_PARTS = [
     [BOX, M.GRIP, -0.036, 0.074, 0, 0.006, 0.008, 0.009, I3],
     [BOX, M.GRIP, 0.036, 0.074, 0, 0.006, 0.008, 0.009, I3],
   ],
+  [ // 9 MAKAROV PM   (tag 2 = slide, tag 3 = magazine) — 161 mm, blued steel, brown bakelite grip
+    [BOX, M.BLUED, 0, 0.022, 0.03, 0.0115, 0.0125, 0.08, I3, 2],     // slide
+    [CYL, M.BLUED, 0, 0.032, 0.03, 0.0105, 0, 0.078, I3, 2],         // rounded top of the slide
+    [BOX, M.BLUED, 0, -0.0015, 0.03, 0.0105, 0.0105, 0.07, I3],      // frame
+    [CYL, M.STEEL, 0, 0.024, 0.111, 0.0065, 0, 0.003, I3, 2],        // muzzle
+    [BOX, M.BLUED, 0, 0.045, 0.1, 0.0025, 0.004, 0.004, I3, 2],      // front sight
+    [BOX, M.BLUED, 0, 0.044, -0.038, 0.008, 0.004, 0.003, I3, 2],    // rear sight
+    [BOX, M.BLUED, 0, 0.026, -0.056, 0.005, 0.009, 0.005, rot(0, -0.4, 0)],   // hammer
+    [BOX, M.STEEL, 0.0122, 0.028, -0.025, 0.0012, 0.005, 0.008, I3, 2],      // safety lever
+    gripped(BOX, M.BAKELITE, 0, -0.054, -0.03, 0.0125, 0.048, 0.021, 0.26, 0),   // grip panels
+    gripped(BOX, M.BLUED, 0, -0.054, -0.03, 0.0095, 0.05, 0.024, 0.26, 0),       // backstrap
+    gripped(BOX, M.BLUED, 0, -0.054, -0.03, 0.0095, 0.008, 0.019, 0.26, -0.052, 3), // magazine floor plate
+    [BOX, M.BLUED, 0, -0.03, 0.03, 0.0035, 0.003, 0.03, I3],         // trigger guard (bottom)
+    [BOX, M.BLUED, 0, -0.019, 0.061, 0.0035, 0.012, 0.003, rot(0, 0.3, 0)],  // trigger guard (front, round)
+    [BOX, M.STEEL, 0, -0.018, 0.024, 0.0025, 0.009, 0.003, I3],      // trigger
+  ],
+  [ // 10 DESERT EAGLE   (tag 2 = slide, tag 3 = magazine) — 270 mm, polished steel, huge
+    [BOX, M.CHROME, 0, 0.026, -0.02, 0.0165, 0.02, 0.086, I3, 2],    // slide
+    [BOX, M.CHROME, 0, 0.03, 0.108, 0.0135, 0.019, 0.064, I3],       // long fixed barrel
+    [BOX, M.CHROME, 0, 0.052, 0.07, 0.006, 0.004, 0.1, I3],          // top rib / rail
+    [BOX, M.CHROME, 0, 0.012, 0.108, 0.0095, 0.008, 0.064, I3],      // barrel underside (triangular look)
+    [CYL, M.GRIP, 0, 0.03, 0.172, 0.009, 0, 0.002, I3],              // bore
+    [BOX, M.CHROME, 0, -0.004, 0.02, 0.015, 0.011, 0.105, I3],       // frame
+    [BOX, M.CHROME, 0, 0.06, 0.16, 0.003, 0.005, 0.005, I3],         // front sight
+    [BOX, M.CHROME, 0, 0.051, -0.09, 0.011, 0.005, 0.005, I3, 2],    // rear sight
+    [BOX, M.CHROME, 0, 0.034, -0.11, 0.007, 0.012, 0.006, rot(0, -0.45, 0)],  // hammer
+    [BOX, M.STEEL, 0.017, 0.032, -0.07, 0.0015, 0.004, 0.012, I3, 2],         // slide release / safety
+    gripped(BOX, M.RUBBER, 0, -0.072, -0.058, 0.0175, 0.066, 0.029, 0.3, 0),  // rubber grip
+    gripped(BOX, M.CHROME, 0, -0.072, -0.058, 0.012, 0.01, 0.026, 0.3, -0.068, 3), // magazine base
+    [BOX, M.CHROME, 0, -0.04, 0.03, 0.0045, 0.0035, 0.04, I3],       // trigger guard (bottom)
+    [BOX, M.CHROME, 0, -0.026, 0.07, 0.0045, 0.016, 0.0035, I3],     // trigger guard (front, squared)
+    [BOX, M.CHROME, 0, -0.045, 0.073, 0.0045, 0.004, 0.006, rot(0, 0.6, 0)],  // finger hook
+    [BOX, M.STEEL, 0, -0.022, 0.016, 0.003, 0.012, 0.004, I3],       // trigger
+  ],
 ];
+
+// where the hands go on each pistol (model units): grip center, grip tilt, grip half-width,
+// barrel height + muzzle z, view-model scale S and third-person scale
+export const PISTOLS = {
+  4:  { grip: [0, -0.06, -0.033], tilt: 0.36, gw: 0.0125, by: 0.027, mz: 0.135, S: 1.5, tp: 2.4 },
+  9:  { grip: [0, -0.054, -0.03], tilt: 0.26, gw: 0.0125, by: 0.024, mz: 0.114, S: 1.7, tp: 2.5 },
+  10: { grip: [0, -0.072, -0.058], tilt: 0.3, gw: 0.0175, by: 0.03, mz: 0.174, S: 1.12, tp: 1.9 },
+};
 
 const tmp = new Float32Array(9);
 // write the item's prims into pool starting at n; returns new n
@@ -147,6 +195,8 @@ const ICONS = [
   { yaw: Math.PI / 2 - 0.42, pitch: -0.4, roll: 0, s: 2.0, c: 0.09, th: 1.15, spin: 0.3 },                      // bat
   { yaw: 0.5, pitch: -Math.PI / 2 + 0.35, s: 3.4, c: 0.07, th: 1, spin: 2, aspect: 0.8 },                      // molotov
   { yaw: 0.42, pitch: 0.36, s: 4.4, c: 0, th: 1, spin: 1.2, aspect: 1.3, oy: -0.012 },                          // medkit
+  { yaw: Math.PI / 2 - 0.5, pitch: -0.05, roll: -0.35, s: 6.4, c: 0.03, th: 1, spin: 0.4, oy: 0.012, aspect: 1.3 }, // makarov
+  { yaw: Math.PI / 2 - 0.5, pitch: -0.05, roll: -0.35, s: 4.0, c: 0.035, th: 1, spin: 0.4, oy: 0.014, aspect: 1.45 }, // desert eagle
 ];
 
 // cached wrapper: inactive icons are static, the active one re-renders ~10×/s

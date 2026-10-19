@@ -6,10 +6,12 @@ import * as WD from '../../shared/world.js';
 import { makePrim, setRotYXZ, SPHERE, BOX, CYL } from './prims.js';
 import { M } from './mats.js';
 import { C } from './ui.js';
-import { placeItem, drawItemIcon } from './items.js';
+import { placeItem, drawItemIcon, PISTOLS } from './items.js';
 
 const SLOTS = ['SHOTGUN', 'KNIFE', 'SODA', 'AK-47', 'PISTOL', 'H.KNIFE', 'BAT', 'MOLOTOV', 'MEDKIT'];
-const KF_ICON = { zombie: ' >(x)< ', dev: ' {dev} ', shotgun: ' =[==> ', knife: ' -|--> ', ak47: ' =|===- ', pistol: ' r=- ', hknife: ' =||==> ', bat: ' (====) ', fire: ' ~^~^~ ' };
+// full magazines for every gun (index → rounds)
+const fullMags = () => Object.fromEntries(WD.ITEMS.map((it, i) => [i, it.kind === 'gun' ? WD.WEAPONS[it.id].mag : 0]).filter(e => e[1]));
+const KF_ICON = { zombie: ' >(x)< ', dev: ' {dev} ', shotgun: ' =[==> ', knife: ' -|--> ', ak47: ' =|===- ', pistol: ' r=- ', makarov: ' r=- ', deagle: ' r==- ', hknife: ' =||==> ', bat: ' (====) ', fire: ' ~^~^~ ' };
 const MELEE_T = { 5: 0.42, 6: 0.62 };         // swing animation length
 const FIRE_CH = '^*\'",.';
 const ZOMBIE_TINT = [78, 118, 70];
@@ -72,7 +74,7 @@ export class Game {
       slash: -1, slashSide: 1, knifeCD: 0, knifeHitDone: false,
       drink: -1, drinkCD: 0, drinkSent: false, gulps: 0,
       reload: -1, reloading: false, reloadBlend: 0, swayX: 0, swayY: 0, pumpSnd: false,
-      mags: { 3: WD.WEAPONS.ak47.mag, 4: WD.WEAPONS.pistol.mag }, gunCD: 0, meleeCD: 0,
+      mags: fullMags(), gunCD: 0, meleeCD: 0,
       throwT: -1, throwSent: false, molotovs: WD.WEAPONS.molotov.count, throwCD: 0,
       use: -1, useSent: false, medCD: 0,
     };
@@ -163,7 +165,7 @@ export class Game {
         if (m.k === 'shot') {
           o.shootT = 0;
           const w = m.w || 0;
-          if (w === 3) A.rifle(pan, vol); else if (w === 4) A.pistol(pan, vol);
+          if (WD.isGun(w)) A.gun(w, pan, vol);
           else { A.shotgun(pan, vol); setTimeout(() => A.pump(pan, vol * 0.7), 250); }
           // muzzle flash + tracers + impacts
           const f = [-Math.sin(o.yaw), 0, -Math.cos(o.yaw)];
@@ -254,7 +256,7 @@ export class Game {
           Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0, hp: 100, dead: false, deadT: 0, slowT: 0, eyeOff: 0 });
           this.zend = null;
           const wp = this.wp; wp.ammo = 6; wp.equip = 1; wp.drinkCD = 0; wp.pump = 0; wp.pumpT = -1;
-          wp.mags = { 3: WD.WEAPONS.ak47.mag, 4: WD.WEAPONS.pistol.mag }; wp.molotovs = WD.WEAPONS.molotov.count; wp.medCD = 0; wp.throwT = -1; wp.use = -1;
+          wp.mags = fullMags(); wp.molotovs = WD.WEAPONS.molotov.count; wp.medCD = 0; wp.throwT = -1; wp.use = -1;
           me.burn = false;
           this.hurtFlash = 0;
         } else {
@@ -522,15 +524,15 @@ export class Game {
 
   // one bullet from the AK-47 or the pistol
   fireGun(w, W) {
-    const wp = this.wp, me = this.me, A = this.app.audio, ak = w === 3;
+    const wp = this.wp, me = this.me, A = this.app.audio, ak = w === 3, kick = W.kick || 1;
     if (!(this.dev && this.dev.ammo)) wp.mags[w]--;
     wp.gunCD = W.cooldown; wp.recoil = 1;
     this.lights.push({ x: me.x, y: me.y + WD.EYE, z: me.z, t: 0.12, max: 0.12, k: 1 });
     this.muzzleFlash = ak ? 0.75 : 0.65; this.flash = ak ? 0.5 : 0.45; this.flashSeed = Math.random() * 6;
-    me.punch -= (ak ? 0.012 : 0.03) * (1 - wp.ads * 0.4);
-    me.yaw += (Math.random() - 0.5) * (ak ? 0.012 : 0.006);
-    this.shake = Math.max(this.shake, ak ? 0.12 : 0.15);
-    if (ak) A.rifle(); else A.pistol();
+    me.punch -= (ak ? 0.012 : 0.03 * kick) * (1 - wp.ads * 0.4);
+    me.yaw += (Math.random() - 0.5) * (ak ? 0.012 : 0.006 * kick);
+    this.shake = Math.max(this.shake, ak ? 0.12 : 0.15 * kick);
+    A.gun(w);
     const d = this.lookDir();
     const spread = W.spread * (wp.ads > 0.5 ? 0.35 : 1) * (Math.hypot(me.vx, me.vz) > 1 ? 1.8 : 1);
     const rx = Math.cos(me.yaw), rz = -Math.sin(me.yaw);
@@ -723,11 +725,11 @@ export class Game {
         if (wp.ammo > 0) this.fireShotgun();
         else if (inp.mouseClicked[0]) A.click();
       }
-    } else if (wp.w !== 3 && wp.w !== 4) { wp.ads = Math.max(0, wp.ads - dt * 7); wp.reloadBlend = 0; }
+    } else if (!WD.isGun(wp.w)) { wp.ads = Math.max(0, wp.ads - dt * 7); wp.reloadBlend = 0; }
 
     // ─── AK-47 / pistol ───
-    if (wp.w === 3 || wp.w === 4) {
-      const id = wp.w === 3 ? 'ak47' : 'pistol', W = WD.WEAPONS[id];
+    if (WD.isGun(wp.w)) {
+      const W = WD.WEAPONS[WD.ITEMS[wp.w].id];
       const aim = ctrl && inp.mouseDown[2] && !wp.reloading;
       wp.ads = clamp(wp.ads + (aim ? dt * 8 : -dt * 8), 0, 1);
       const mag = wp.mags[wp.w];
@@ -911,14 +913,18 @@ export class Game {
       const s = 2.4;
       setRotYXZ(IR, o.yaw + Math.PI + k * 0.9, -0.5 + k * 0.9, 0);
       n = placeItem(pr, n, out, 1, toW(R, 0, 0, 0.05 * s), IR, s);
-    } else if (o.w === 3 || o.w === 4) {
-      // AK-47 in both hands / pistol held out in front
-      const ak = o.w === 3, s = ak ? 1.7 : 2.4;
-      setRotYXZ(IR, o.yaw + Math.PI, -o.pitch * 0.8 - rec * (ak ? 0.5 : 1.4), 0);
-      const G = W(ak ? [0.4, -0.1 + rec * 0.05, 0.55 - rec * 0.2] : [0.25, 0.02, 0.85 - rec * 0.2]);
+    } else if (o.w === 3 || PISTOLS[o.w]) {
+      // AK-47 in both hands / pistols held out in front with both hands (isosceles stance)
+      const ak = o.w === 3, P = PISTOLS[o.w], s = ak ? 1.7 : P.tp;
+      setRotYXZ(IR, o.yaw + Math.PI, -o.pitch * 0.8 - rec * (ak ? 0.5 : o.w === 10 ? 2 : 1.4), 0);
+      const G = W(ak ? [0.4, -0.1 + rec * 0.05, 0.55 - rec * 0.2] : [0.12, 0.06, 0.88 - rec * 0.2]);
       n = placeItem(pr, n, out, o.w, G, IR, s);
-      R = toW(G, 0, -0.095 * s, -0.1 * s);
-      L = ak ? toW(G, 0, -0.035 * s, 0.29 * s) : toW(G, -0.04 * s, -0.08 * s, -0.03 * s);
+      if (ak) { R = toW(G, 0, -0.095 * s, -0.1 * s); L = toW(G, 0, -0.035 * s, 0.29 * s); }
+      else {
+        const g = P.grip;
+        R = toW(G, (g[0] + P.gw + 0.03) * s, g[1] * s, (g[2] - 0.01) * s);   // right hand wraps the grip
+        L = toW(G, (g[0] - P.gw - 0.03) * s, (g[1] - 0.01) * s, g[2] * s);   // support hand on the other side
+      }
     } else if (o.w === 5 || o.w === 6) {
       const bat = o.w === 6, T = MELEE_T[o.w];
       const k = o.knifeT < T ? Math.sin(o.knifeT / T * Math.PI) : 0;
@@ -926,11 +932,14 @@ export class Game {
         // bat on the shoulder → big horizontal swing
         const sw = o.knifeT < T ? o.knifeT / T : 1;
         const ang = o.knifeT < T ? (sw < 0.3 ? 0.9 * o.side : (0.9 - (sw - 0.3) / 0.7 * 2.4) * o.side) : 0;
+        // both hands on the handle: left hand at the knob, right hand stacked right above it
         const s = 2.0;
-        R = W([0.55 - k * 0.3, 0.05 - k * 0.15, 0.3 + k * 0.4]);
-        L = W([0.35 - k * 0.3, 0.0 - k * 0.15, 0.32 + k * 0.4]);
+        const A = W([0.72 - k * 0.45, -0.05 - k * 0.1, 0.55 + k * 0.35]);
         setRotYXZ(IR, o.yaw + Math.PI + ang, -1.25 + k * 1.15, 0);
-        n = placeItem(pr, n, out, 6, toW(R, 0, 0, 0.2 * s), IR, s);
+        const pos = toW(A, 0, 0, 0.2 * s);
+        n = placeItem(pr, n, out, 6, pos, IR, s);
+        R = toW(pos, 0, 0, -0.13 * s);
+        L = toW(pos, 0, 0, -0.25 * s);
       } else {
         R = W([0.82 - k * 0.7, -0.12 + k * 0.2, 0.25 + k * 0.7 + swing]);
         L = W([-0.8, -0.12, 0.2 - swing]);
@@ -1004,7 +1013,7 @@ export class Game {
     }
     app.renderer.render(scr.fine, cam, {
       players, vm, particles: this.flameSprites(players), floorDecals: this.floorDecals,
-      flash: this.flash * 0.5, muzzleFlash: wp.w === 0 || wp.w === 3 || wp.w === 4 ? this.muzzleFlash : 0, vmMuzzle: app.vm.muzzle, flashSeed: this.flashSeed,
+      flash: this.flash * 0.5, muzzleFlash: wp.w === 0 || WD.isGun(wp.w) ? this.muzzleFlash : 0, vmMuzzle: app.vm.muzzle, flashSeed: this.flashSeed,
       fires: this.fires, time: this.time,
       zones: this.mode === 'cap' ? WD.CAP_BASES.map((b, i) => [b[0], b[2], WD.CAP_BASE_R, ...WD.TEAM_COL[i]]) : null,
       dark: this.mode === 'dark' ? this.darkLights(cam) : null,
@@ -1208,7 +1217,7 @@ export class Game {
         const inf = this.dev && this.dev.ammo;
         if (i === 0) label = inf ? '∞' : `${'|'.repeat(wp.ammo)}${'.'.repeat(6 - wp.ammo)}`;
         if (i === 2 && wp.drinkCD > 0) label = `${wp.drinkCD.toFixed(1)}s`;
-        if (i === 3 || i === 4) { const m = wp.mags[i]; label = inf ? '∞' : `${m}/${WD.WEAPONS[i === 3 ? 'ak47' : 'pistol'].mag}`; if (m <= 3 && !inf) lc = C.red; }
+        if (WD.isGun(i)) { const m = wp.mags[i]; label = inf ? '∞' : `${m}/${WD.WEAPONS[WD.ITEMS[i].id].mag}`; if (m <= 3 && !inf) lc = C.red; }
         if (i === 7) { label = inf ? 'x∞' : `x${wp.molotovs}`; if (!wp.molotovs && !inf) lc = C.line; }
         if (i === 8 && wp.medCD > 0) label = `${wp.medCD.toFixed(1)}s`;
         scr.textC(y0 + sh - 2, label, lc, bg, x + sw / 2);
