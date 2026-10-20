@@ -77,9 +77,10 @@ export class Renderer {
     if (!this.job) {
       // interleaved rows (worker k traces rows k, k+n, k+2n…): a player or fire in one part of
       // the screen no longer lands on a single worker, so the load stays even
-      const id = ++this.jobId;
-      this.job = { id, cols, rows, bands: new Array(n), done: 0, t0: performance.now() };
-      this.workers.forEach((w, k) => w.postMessage({ id, k, y0: k, y1: rows, step: n, C }));
+      // halfRows (auto quality): every second row is traced and doubled — about 2× faster, same symbol size
+      const id = ++this.jobId, h = this.halfRows ? 2 : 1;
+      this.job = { id, cols, rows, half: h === 2, bands: new Array(n), done: 0, t0: performance.now() };
+      this.workers.forEach((w, k) => w.postMessage({ id, k, y0: k * h, y1: rows, step: n * h, C }));
     }
     const L = this.latest;
     if (!L || L.cols !== cols || L.rows !== rows) return false;   // first frame / resize: trace here once
@@ -89,6 +90,11 @@ export class Renderer {
         const s0 = j * cols, off = y * cols;
         A.set(b.A.subarray(s0 * 4, (s0 + cols) * 4), off * 4); B.set(b.B.subarray(s0 * 4, (s0 + cols) * 4), off * 4);
         depth.set(b.depth.subarray(s0, s0 + cols), off); vmId.set(b.vmId.subarray(s0, s0 + cols), off);
+        if (L.half && y + 1 < rows) {
+          const o2 = off + cols;
+          A.copyWithin(o2 * 4, off * 4, (off + cols) * 4); B.copyWithin(o2 * 4, off * 4, (off + cols) * 4);
+          depth.copyWithin(o2, off, off + cols); vmId.copyWithin(o2, off, off + cols);
+        }
       }
     }
     return true;
@@ -290,9 +296,27 @@ function drawFlame(scr, depth, cols, rows, cx, cy, dist, p, tanY) {
 
 // ── the per-cell ray tracer: rows y0..y1 of the screen; writes into band buffers
 //    (index = cell - base). Runs on the main thread or inside render workers.
+// screen tiles → which players can appear in them (each cell only tests those, not every player)
+function buildTiles(C) {
+  const { cols, rows, rects } = C, np = C.players.length;
+  const TW = 16, TH = 8, tcols = Math.ceil(cols / TW), trows = Math.ceil(rows / TH), nt = tcols * trows;
+  const lists = Array.from({ length: nt }, () => []);
+  for (let i = 0; i < np; i++) {
+    const x0 = rects[i * 4], x1 = rects[i * 4 + 1], y0 = rects[i * 4 + 2], y1 = rects[i * 4 + 3];
+    if (x1 < x0 || x1 < 0 || x0 >= cols || y1 < 0 || y0 >= rows) continue;
+    for (let ty = Math.max(0, Math.floor(y0 / TH)); ty <= Math.min(trows - 1, Math.floor(y1 / TH)); ty++)
+      for (let tx = Math.max(0, Math.floor(x0 / TW)); tx <= Math.min(tcols - 1, Math.floor(x1 / TW)); tx++) lists[ty * tcols + tx].push(i);
+  }
+  const tileStart = new Int32Array(nt + 1);
+  for (let t = 0; t < nt; t++) tileStart[t + 1] = tileStart[t] + lists[t].length;
+  const tileIdx = new Int16Array(tileStart[nt]);
+  for (let t = 0, k = 0; t < nt; t++) for (const i of lists[t]) tileIdx[k++] = i;
+  C.tileStart = tileStart; C.tileIdx = tileIdx; C.tcols = tcols;
+}
 export function traceRows(C, y0, y1, base, A, B, depth, vmId, step = 1) {
+  if (!C.tileStart) buildTiles(C);
   const { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, gFire, fires, time, ox, oy, oz, fx, fy, fz, rx, ry, rz, ux, uy, uz,
-    tanX, tanY, vmTanX, vmTanY, flash, players, rects, vm, vx0, vx1, vy0, vy1, decals } = C;
+    tanX, tanY, vmTanX, vmTanY, flash, players, rects, vm, vx0, vx1, vy0, vy1, decals, tileStart, tileIdx, tcols } = C;
   const nf = fires ? fires.length : 0, tStep = Math.floor((time || 0) * 14);
   const { dark, zones } = C;
   const nl = dark ? dark.length : 0;
@@ -334,7 +358,7 @@ for (let cy = y0, row = 0; cy < y1; cy += step, row++) {
       // ───── viewmodel (camera space) ─────
       if (nvm && cx >= vx0 && cx <= vx1 && cy >= vy0 && cy <= vy1) {
         let dxv = sx * vmTanX, dyv = sy * vmTanY, dzv = 1;
-        const l = 1 / Math.hypot(dxv, dyv, dzv); dxv *= l; dyv *= l; dzv *= l;
+        const l = 1 / Math.sqrt(dxv * dxv + dyv * dyv + dzv * dzv); dxv *= l; dyv *= l; dzv *= l;
         let best = 1e9, bp = null, bk = -1, bnx = 0, bny = 0, bnz = 0, blz = 0;
         for (let k = 0; k < nvm; k++) {
           const q = vm[k];
@@ -361,7 +385,7 @@ for (let cy = y0, row = 0; cy < y1; cy += step, row++) {
           const s2 = s * s, s4 = s2 * s2, s8 = s4 * s4;
           lum = 0.1 + ndl * 0.55 + facing * 0.22 + s8 * s8 * b.spec * 0.9 + flash * 0.6;
           // rim
-          lum += Math.pow(1 - facing, 3) * 0.12;
+          { const f1 = 1 - facing; lum += f1 * f1 * f1 * 0.12; }
           col0 = b.c[0]; col1 = b.c[1]; col2 = b.c[2];
           if (mat === M.FLAME) {
             const h = hash3(cx, cy, tStep);
@@ -381,15 +405,16 @@ for (let cy = y0, row = 0; cy < y1; cy += step, row++) {
         let dx = fx + rx * sx * tanX + ux * sy * tanY;
         let dy = fy + ry * sx * tanX + uy * sy * tanY;
         let dz = fz + rz * sx * tanX + uz * sy * tanY;
-        const l = 1 / Math.hypot(dx, dy, dz); dx *= l; dy *= l; dz *= l;
+        const l = 1 / Math.sqrt(dx * dx + dy * dy + dz * dz); dx *= l; dy *= l; dz *= l;
 
         // world
         const tw = WD.raycast(ox, oy, oz, dx, dy, dz, 46, rc);
         if (tw > 0) { t = tw; mat = rc.mat; nx = rc.nx; ny = rc.ny; nz = rc.nz; }
 
-        // players
-        for (let i = 0; i < np; i++) {
-          const i4 = i * 4;
+        // players (only those whose screen box touches this tile)
+        const tile = (cy >> 3) * tcols + (cx >> 4);
+        for (let ti = tileStart[tile], te = tileStart[tile + 1]; ti < te; ti++) {
+          const i = tileIdx[ti], i4 = i * 4;
           if (cx < rects[i4] || cx > rects[i4 + 1] || cy < rects[i4 + 2] || cy > rects[i4 + 3]) continue;
           const pl = players[i];
           // cheap bounding-sphere test first: most rays miss the player (or a wall is in front)
@@ -496,7 +521,7 @@ for (let cy = y0, row = 0; cy < y1; cy += step, row++) {
           // ───── player ball ─────
           if (mat === M.BODY) {
             col0 = owner.tint[0]; col1 = owner.tint[1]; col2 = owner.tint[2];
-            lum += Math.pow(1 - facing, 2.5) * 0.35; // rim light
+            { const f1 = 1 - facing; lum += f1 * f1 * Math.sqrt(f1) * 0.35; } // rim light
             if (owner.dead) lum *= 0.55;
             // wounds (in body local space)
             const ws = owner.wounds;
@@ -529,7 +554,7 @@ for (let cy = y0, row = 0; cy < y1; cy += step, row++) {
             else lum = 1.0;
           } else if (mat === M.ARM) {
             col0 = owner.tint[0]; col1 = owner.tint[1]; col2 = owner.tint[2];
-            lum += Math.pow(1 - facing, 2.5) * 0.3;
+            { const f1 = 1 - facing; lum += f1 * f1 * Math.sqrt(f1) * 0.3; }
           }
         }
         // ── burning ground under a molotov fire ──
@@ -562,7 +587,7 @@ for (let cy = y0, row = 0; cy < y1; cy += step, row++) {
         // ── CAPTURE: team bases painted on the floor ──
         if (zones && ny > 0.5 && hy < 0.05) {
           for (const Z of zones) {
-            const d = Math.hypot(hx - Z[0], hz - Z[1]);
+            const d = Math.sqrt((hx - Z[0]) ** 2 + (hz - Z[1]) ** 2);
             if (d > Z[2]) continue;
             const ring = d > Z[2] - 0.18;
             col0 = col0 * 0.35 + Z[3] * 0.65; col1 = col1 * 0.35 + Z[4] * 0.65; col2 = col2 * 0.35 + Z[5] * 0.65;

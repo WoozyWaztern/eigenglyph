@@ -98,7 +98,7 @@ const MIME = {
 const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.9' })); }
+  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '2.0' })); }
   if (url === '/api/prefs') {   // local settings store (only for the player on this PC)
     const ra = req.socket.remoteAddress || '';
     if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) { res.writeHead(403); return res.end(); }
@@ -530,6 +530,7 @@ function damage(room, target, attacker, dmg, weapon, wounds, pts) {
   if (target.c && devOf(target.c).god && weapon !== 'dev') dmg = 0;   // dev: god mode
   if (attacker && attacker.c && devOf(attacker.c).onehit) dmg = 9999;
   target.hp = Math.max(0, target.hp - dmg);
+  if (dmg > 0) target.lastHurt = now();
   for (const w of wounds) { target.wounds.push(w); if (target.wounds.length > 28) target.wounds.shift(); }
   broadcast(room, { t: 'hit', id: target.id, by: attacker ? attacker.id : 0, dmg, hp: target.hp, w: weapon, wounds, pts });
   if (target.hp > 0) return;
@@ -625,12 +626,30 @@ function onKnife(p, m) {
   if (!h || t < h.p.protUntil) return;
   damage(room, h.p, p, world.WEAPONS.knife.dmg, 'knife', slashWounds(h.p, h.point, m.side === -1 ? -1 : 1, 1, 1), [h.point.map(r3)]);
 }
-function onDrink(p) {
+// a teammate right in front of you (CAPTURE: own team · ZOMBIES: every player) gets the heal instead of you
+function allyInFront(p, d) {
+  const room = p.room;
+  if (!d || !(room.mode === 'cap' || room.mode === 'zombie')) return null;
+  const o = [p.x, p.y + world.EYE, p.z];
+  let best = null, bt = 3.4;
+  for (const q of room.players.values()) {
+    if (q === p || q.dead || (room.mode === 'cap' && q.team !== p.team)) continue;
+    const tt = world.raySphere(o[0], o[1], o[2], d[0], d[1], d[2], q.x, q.y + world.BODY_CY, q.z, world.BODY_R + 0.25);
+    if (tt > 0 && tt < bt) { bt = tt; best = q; }
+  }
+  return best;
+}
+function healTarget(p, m, amount, w) {
+  const tg = allyInFront(p, norm(m && m.d)) || p;
+  tg.hp = Math.min(world.MAX_HP, tg.hp + amount);
+  if (w === world.ITEM_IDX.medkit) tg.burnUntil = 0;
+  broadcast(p.room, { t: 'heal', id: tg.id, hp: tg.hp, w, by: tg === p ? 0 : p.id });
+}
+function onDrink(p, m) {
   const t = now();
   if (p.dead || !owns(p, 2) || t - p.lastDrink < world.WEAPONS.soda.cooldown - 0.3) return;
   p.lastDrink = t;
-  p.hp = Math.min(world.MAX_HP, p.hp + world.WEAPONS.soda.heal);
-  broadcast(p.room, { t: 'heal', id: p.id, hp: p.hp });
+  healTarget(p, m, world.WEAPONS.soda.heal, 2);
 }
 function onFire(p, m) {
   const t = now(), w = m.w | 0, it = world.ITEMS[w], room = p.room;
@@ -679,7 +698,7 @@ function onThrow(p, m) {
     return null;
   });
   broadcast(room, { t: 'throw', id: p.id, o: o.map(r3), v: v.map(r3), cd });
-  room.pending.push({ at: t + path.t, x: path.x, y: path.y, z: path.z, hit: path.hit, by: p });
+  room.pending.push({ at: t + path.t, x: path.x, y: path.y, z: path.z, hit: path.hit, by: p, vx: v[0], vz: v[2] });
 }
 function burn(room, target, by) {
   if (target === by || target.dead || room.match.phase !== 'play') return;
@@ -689,24 +708,41 @@ function burn(room, target, by) {
   target.burnBy = by;
   if (!was) target.burnTick = now() + 0.15;
 }
-function onMedkit(p) {
+function onMedkit(p, m) {
   const t = now(), W = world.WEAPONS.medkit, dev = devOf(p.c);
   if (p.dead || !owns(p, world.ITEM_IDX.medkit) || (t - p.lastMed < W.cooldown - 0.5 && !dev.ammo)) return;
   p.lastMed = t;
-  p.hp = Math.min(world.MAX_HP, p.hp + W.heal);
-  p.burnUntil = 0;
-  broadcast(p.room, { t: 'heal', id: p.id, hp: p.hp, w: world.ITEM_IDX.medkit });
+  healTarget(p, m, W.heal, world.ITEM_IDX.medkit);
 }
 function fireTick(room, t) {
   for (let i = room.pending.length - 1; i >= 0; i--) {
     const q = room.pending[i];
     if (t < q.at) continue;
     room.pending.splice(i, 1);
-    const W = world.WEAPONS.molotov;
-    const f = { x: q.x, y: q.hit ? q.hit.y : q.y, z: q.z, r: W.fireR, until: now() + W.fireT, by: q.by };
+    if (q.patch) {           // a splash of burning liquid lands
+      const f = { x: q.x, y: q.y, z: q.z, r: q.r, until: now() + q.life, by: q.by };
+      room.fires.push(f); broadcast(room, { ...fireMsg(f), patch: 1 });
+      continue;
+    }
+    // the bottle shatters: a pool where it hit + burning liquid splashed forward and to the sides
+    const W = world.WEAPONS.molotov, y0 = q.hit ? q.hit.y : q.y;
+    const f = { x: q.x, y: y0, z: q.z, r: 1.15, until: now() + W.fireT, by: q.by };
     room.fires.push(f);
-    broadcast(room, fireMsg(f));
+    let dl = Math.hypot(q.vx || 0, q.vz || 0) || 1;
+    const dx = (q.vx || 1) / dl, dz = (q.vz || 0) / dl;
+    broadcast(room, { ...fireMsg(f), main: 1, dx: r3(dx), dz: r3(dz) });
     if (q.hit && !q.hit.dead) burn(room, q.hit, q.by);
+    const n = 9 + Math.floor(Math.random() * 4);
+    for (let k = 0; k < n; k++) {
+      const ang = (Math.random() - 0.5) * (k < 5 ? 1.2 : 4.2);            // most splashes fly on in the throw direction
+      const dist = (k < 5 ? 1.3 : 0.9) + Math.random() * (k < 5 ? 2.6 : 1.6);
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const px = q.x + (dx * ca - dz * sa) * dist, pz = q.z + (dx * sa + dz * ca) * dist;
+      if (px < 0.5 || pz < 0.5 || px > world.W - 0.5 || pz > world.D - 0.5) continue;
+      const gy = world.groundBelow(px, y0 + 1.1, pz);
+      if (Math.abs(gy - y0) > 1.05 || world.solid(Math.floor(px), Math.floor(gy), Math.floor(pz))) continue;   // a wall stops the splash
+      room.pending.push({ patch: 1, at: t + 0.05 + dist * 0.09 + Math.random() * 0.08, x: px, y: gy, z: pz, r: 0.45 + Math.random() * 0.5, life: W.fireT * (0.55 + Math.random() * 0.4), by: q.by });
+    }
   }
   for (let i = room.fires.length - 1; i >= 0; i--) {
     const f = room.fires[i];
@@ -869,7 +905,7 @@ function zombieTick(room, t, dt) {
       }
       saveSoon();
       broadcast(room, { t: 'wave', wave: room.wave, cleared: true, bonus });
-      if (room.wave >= world.ZOMBIE_WAVES) return zombieGameOver(room, true);   // all 50 waves survived
+      if (room.wave >= world.ZOMBIE_WAVES) return zombieGameOver(room, true);   // all waves survived
     }
     room.breakT = t + 6;
   }
@@ -936,15 +972,34 @@ function zombieTick(room, t, dt) {
     let vx = gx / gl * z.speed * slow + z.kx, vz = gz / gl * z.speed * slow + z.kz;
     z.kx *= 0.85; z.kz *= 0.85;
     if (d < 1.25) { vx = z.kx; vz = z.kz; }
-    const inside = world.boxBlocked(z.x, z.y, z.z, 0.45);       // already overlapping a block → let it walk out
-    const step = (nx, nz) => {
-      if (inside || !world.boxBlocked(nx, z.y, nz, 0.45)) return true;
-      if (!world.boxBlocked(nx, z.y + 1.01, nz, 0.45) && !world.boxBlocked(z.x, z.y + 1.01, z.z, 0.45)) { z.y = Math.floor(z.y + 1.01); return true; }
+    // ── real movement: solid blocks always stop them, a 1-block step is JUMPED onto (gravity, no teleport) ──
+    const ZR = 0.45;
+    if (world.boxBlocked(z.x, z.y, z.z, ZR)) {
+      // stuck inside a block (spawned there, shoved by a bat): pop out to the nearest free spot
+      let done = false;
+      for (let r = 0.15; r <= 1.2 && !done; r += 0.15) for (let a = 0; a < 8 && !done; a++) {
+        const px = z.x + Math.cos(a * Math.PI / 4) * r, pz = z.z + Math.sin(a * Math.PI / 4) * r;
+        if (!world.boxBlocked(px, z.y, pz, ZR)) { z.x = px; z.z = pz; done = true; }
+      }
+      if (!done) z.y = Math.floor(z.y) + 1;
+    }
+    const onGround = z.y <= world.groundBelow(z.x, z.y + 0.3, z.z) + 0.01;
+    let wantJump = false;
+    const tryMove = (nx, nz) => {
+      if (!world.boxBlocked(nx, z.y, nz, ZR)) return true;
+      // a block in the way: if it is only 1 high (free above it), jump onto it
+      if (!world.boxBlocked(nx, z.y + 1.05, nz, ZR) && !world.boxBlocked(z.x, z.y + 1.05, z.z, ZR)) wantJump = true;
       return false;
     };
-    const nx = z.x + vx * dt; if (step(nx, z.z)) z.x = nx;
-    const nz = z.z + vz * dt; if (step(z.x, nz)) z.z = nz;
-    z.y = Math.min(z.y, world.groundBelow(z.x, z.y + 0.2, z.z));
+    const mx = z.x + vx * dt; if (tryMove(mx, z.z)) z.x = mx;
+    const mz = z.z + vz * dt; if (tryMove(z.x, mz)) z.z = mz;
+    if (wantJump && onGround && !(z.vy > 0)) z.vy = 7.4;               // jump up a step (peak ≈ 1.5 blocks)
+    z.vy = (z.vy || 0) - 18 * dt;
+    let ny = z.y + z.vy * dt;
+    if (z.vy > 0 && world.boxBlocked(z.x, ny, z.z, ZR)) { ny = z.y; z.vy = 0; }   // head hits a ceiling
+    const gnd = world.groundBelow(z.x, Math.max(ny, z.y) + 0.3, z.z);
+    if (ny <= gnd) { ny = gnd; z.vy = 0; }
+    z.y = ny;
     if (d > 0.01) z.yaw = Math.atan2(-dx, -dz);
     // bite
     if (d < 1.6 && Math.abs(pl.y - z.y) < 1.6 && !pl.dead && t > z.atkT) {
@@ -985,7 +1040,7 @@ const DEV_HELP = [
   'heal · tp <x> <z>            full health · teleport (map 0..48)',
   'time <sec> · end             time left · end the match now',
   'wave <n> · spawn <n> · killall   ZOMBIES tools',
-  'kill <player>                kill a player in a match',
+  'kill <player> · hurt <player> <n>   kill / damage a player in a match',
   'clear                        clear this panel',
 ];
 // "5000", "1.5m", "2b", "1t", "3qa", "1e100", "googol" → number
@@ -1185,6 +1240,11 @@ function onDev(c, m) {
       for (let i = 0; i < n; i++) spawnZombie(room, Math.max(1, room.wave));
       return devReply(c, `spawned ${n}`);
     }
+    case 'hurt': {
+      const k = accKey(a1), oc = k && onlineConn(k), v = Math.max(1, Math.min(99, num(a2) || 30));
+      if (!oc || !oc.player) return devReply(c, 'usage: hurt <player> 30  (the player must be in a match)', false);
+      damage(oc.player.room, oc.player, null, v, 'dev', [], []); return devReply(c, `${oc.name} -${v} HP`);
+    }
     case 'kill': {
       const k = accKey(a1), oc = k && onlineConn(k);
       if (!oc || !oc.player) return devReply(c, 'usage: kill <player>  (the player must be in a match)', false);
@@ -1260,11 +1320,11 @@ attach(server, '/ws', ws => {
       }
       case 'shoot': onShoot(p, m); break;
       case 'knife': onKnife(p, m); break;
-      case 'drink': onDrink(p); break;
+      case 'drink': onDrink(p, m); break;
       case 'fire': onFire(p, m); break;
       case 'melee': onMelee(p, m); break;
       case 'throw': onThrow(p, m); break;
-      case 'medkit': onMedkit(p); break;
+      case 'medkit': onMedkit(p, m); break;
       case 'chat': {
         const t = now();
         if (t - p.lastChat < 0.35) break;
@@ -1289,6 +1349,12 @@ setInterval(() => {
         spawn(room, p);
         broadcast(room, { t: 'respawn', id: p.id, x: r3(p.x), y: r3(p.y), z: r3(p.z), yaw: r3(p.yaw) });
       }
+    }
+    // health comes back slowly: 4 s after the last hit, +7 HP per second (not while burning)
+    for (const p of room.players.values()) {
+      if (p.dead || p.hp >= world.MAX_HP || p.burnUntil > t || t - (p.lastHurt || 0) < 4) { p.regen = 0; continue; }
+      p.regen = (p.regen || 0) + 7 * dt;
+      if (p.regen >= 1) { const k = Math.floor(p.regen); p.regen -= k; p.hp = Math.min(world.MAX_HP, p.hp + k); }
     }
     fireTick(room, t);
     if (room.mode === 'cap') captureTick(room, t);

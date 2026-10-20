@@ -22,7 +22,7 @@ export const WEAPONS = {
   shotgun: { dmg: 27, cooldown: 0.85, range: 40 },
   knife:   { dmg: 7,  cooldown: 0.36, range: 2.4 },
   soda:    { heal: 25, cooldown: 7 },
-  ak47:    { dmg: 9,  cooldown: 0.105, range: 60, mag: 30, reload: 2.3, spread: 0.014, auto: true },
+  ak47:    { dmg: 15, cooldown: 0.11, range: 60, mag: 30, reload: 2.3, spread: 0.014, auto: true },
   pistol:  { dmg: 17, cooldown: 0.26, range: 50, mag: 12, reload: 1.45, spread: 0.008 },
   makarov: { dmg: 21, cooldown: 0.3, range: 48, mag: 8, reload: 1.5, spread: 0.009 },
   deagle:  { dmg: 44, cooldown: 0.58, range: 70, mag: 7, reload: 2.0, spread: 0.011, kick: 2.2 },
@@ -93,7 +93,7 @@ export function itemStats(id) {
     case 'shotgun': return [['DAMAGE', W.dmg, 0.75, '27 / shot'], ['FIRE RATE', 1 / W.cooldown, 0.12, '70 / min'], ['RANGE', W.range, 0.6, 'short'], ['MAGAZINE', 6, 0.2, '6 shells']];
     case 'knife':   return [['DAMAGE', W.dmg, 0.2, '7 / slash'], ['SPEED', 1 / W.cooldown, 0.9, 'very fast'], ['RANGE', W.range, 0.25, '2.4 m'], ['WEIGHT', 0, 0.1, 'light']];
     case 'soda':    return [['HEAL', W.heal, 0.3, '+25 HP'], ['COOLDOWN', W.cooldown, 0.35, '7 s'], ['USE TIME', 1.6, 0.5, '1.6 s'], ['USES', 0, 1, 'unlimited']];
-    case 'ak47':    return [['DAMAGE', W.dmg, 0.3, '9 / bullet'], ['FIRE RATE', 1 / W.cooldown, 1, '570 / min'], ['RANGE', W.range, 1, 'long'], ['MAGAZINE', W.mag, 0.9, '30 rounds']];
+    case 'ak47':    return [['DAMAGE', W.dmg, 0.45, '15 / bullet'], ['FIRE RATE', 1 / W.cooldown, 1, '545 / min'], ['RANGE', W.range, 1, 'long'], ['MAGAZINE', W.mag, 0.9, '30 rounds']];
     case 'pistol':  return [['DAMAGE', W.dmg, 0.5, '17 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.45, '230 / min'], ['RANGE', W.range, 0.8, 'medium'], ['MAGAZINE', W.mag, 0.4, '12 rounds']];
     case 'makarov': return [['DAMAGE', W.dmg, 0.6, '21 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.4, '200 / min'], ['RANGE', W.range, 0.75, 'medium'], ['MAGAZINE', W.mag, 0.3, '8 rounds']];
     case 'deagle':  return [['DAMAGE', W.dmg, 1, '44 / bullet'], ['FIRE RATE', 1 / W.cooldown, 0.22, '100 / min'], ['RANGE', W.range, 1, 'long'], ['MAGAZINE', W.mag, 0.25, '7 rounds']];
@@ -240,6 +240,44 @@ export function boxBlocked(px, py, pz, r = COL_R, h = COL_H) {
 // 3D DDA voxel ray cast. dir must be normalized.
 // returns distance or -1. out: {nx,ny,nz,mat,x,y,z}
 export function raycast(ox, oy, oz, dx, dy, dz, maxT, out) {
+  // fast path (the camera is inside the map): walk a flat voxel index, check only the axis that moved
+  let x = Math.floor(ox), y = Math.floor(oy), z = Math.floor(oz);
+  if (x < 0 || y < 0 || z < 0 || x >= W || y >= H || z >= D) return raycastSlow(ox, oy, oz, dx, dy, dz, maxT, out);
+  const sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+  const ddx = dx !== 0 ? Math.abs(1 / dx) : 1e30, ddy = dy !== 0 ? Math.abs(1 / dy) : 1e30, ddz = dz !== 0 ? Math.abs(1 / dz) : 1e30;
+  let tx = dx > 0 ? (x + 1 - ox) * ddx : dx < 0 ? (ox - x) * ddx : 1e30;
+  let ty = dy > 0 ? (y + 1 - oy) * ddy : dy < 0 ? (oy - y) * ddy : 1e30;
+  let tz = dz > 0 ? (z + 1 - oz) * ddz : dz < 0 ? (oz - z) * ddz : 1e30;
+  const stepY = sy * W * D, stepZ = sz * W;
+  let idx = (y * D + z) * W + x, t = 0, face = 1;
+  for (let i = 0; i < 200; i++) {
+    if (tx < ty && tx < tz) {
+      x += sx; t = tx; tx += ddx; face = 0; idx += sx;
+      if (t > maxT) return -1;
+      if (x < 0 || x >= W) break;
+    } else if (ty < tz) {
+      y += sy; t = ty; ty += ddy; face = 1; idx += stepY;
+      if (t > maxT) return -1;
+      if (y < 0) { out.nx = 0; out.ny = 1; out.nz = 0; out.mat = MAT.FLOOR; out.x = x; out.y = y; out.z = z; return t; }
+      if (y >= H) return -1;
+    } else {
+      z += sz; t = tz; tz += ddz; face = 2; idx += stepZ;
+      if (t > maxT) return -1;
+      if (z < 0 || z >= D) break;
+    }
+    const m = voxels[idx];
+    if (m !== 0) {
+      out.nx = face === 0 ? -sx : 0; out.ny = face === 1 ? -sy : 0; out.nz = face === 2 ? -sz : 0;
+      out.mat = m; out.x = x; out.y = y; out.z = z; return t;
+    }
+  }
+  // left the map sideways: only the endless floor can still be hit
+  if (dy >= 0) return -1;
+  const tf = -oy / dy;
+  if (tf > maxT) return -1;
+  out.nx = 0; out.ny = 1; out.nz = 0; out.mat = MAT.FLOOR; out.x = -1; out.y = -1; out.z = -1; return tf;
+}
+export function raycastSlow(ox, oy, oz, dx, dy, dz, maxT, out) {
   let x = Math.floor(ox), y = Math.floor(oy), z = Math.floor(oz);
   const sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
   const ddx = dx !== 0 ? Math.abs(1 / dx) : 1e30;
@@ -318,9 +356,9 @@ export const TEAM_COL = [[214, 70, 70], [80, 130, 230]];
 export const TEAM_NAME = ['RED', 'BLUE'];
 // zombies: wave → how many, how tough, how fast
 // ZOMBIES ends after ZOMBIE_WAVES waves (clear the last one = you survived)
-export const ZOMBIE_WAVES = 50;
+export const ZOMBIE_WAVES = 25;
 export function zombieWave(n) {
-  return { count: Math.min(32, 3 + n * 2), hp: 30 + n * 9, speed: Math.min(5.4, 2.4 + n * 0.12), dmg: Math.min(34, 8 + n) };
+  return { count: Math.min(36, 4 + n * 2), hp: 35 + n * 14, speed: Math.min(5.6, 2.5 + n * 0.13), dmg: Math.min(30, 8 + n) };
 }
 
 // ── RANKS: 9 ranks × 3 divisions (I · II · III). ELO needed for one division of each rank.

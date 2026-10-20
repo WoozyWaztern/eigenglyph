@@ -245,10 +245,17 @@ export class Game {
         }
         break;
       }
-      case 'heal':
+      case 'heal': {
+        // m.by: a teammate healed someone else (medkit / soda aimed at a friend)
         if (m.id === this.myId) { me.hp = m.hp; A.heal(); if (m.w === 8) { this.healFx = 1.2; me.burn = false; } }
-        else { const o = this.others.get(m.id); if (o) { o.hp = m.hp; if (m.w === 8) { o.useT = 0; o.burn = false; } else o.drinkT = 0; } }
+        else { const o = this.others.get(m.id); if (o) { o.hp = m.hp; if (m.w === 8) o.burn = false; } }
+        const healer = m.by ? this.others.get(m.by) : m.id !== this.myId ? this.others.get(m.id) : null;
+        if (healer) { if (m.w === 8) healer.useT = 0; else healer.drinkT = 0; }
+        if (m.by && m.id === this.myId) this.centerMsg = { text: `${this.playerName(m.by)} healed you  ·  ${m.hp} HP`, t: 2, col: [110, 220, 130] };
+        if (m.by === this.myId) { this.centerMsg = { text: `you healed ${this.playerName(m.id)}  ·  ${m.hp} HP`, t: 2, col: [110, 220, 130] }; A.heal(); }
+        if (m.by) { const t = m.id === this.myId ? me : this.others.get(m.id); if (t) for (let i = 0; i < 12; i++) this.spawn(t.x + (Math.random() - 0.5) * 1.4, t.y + 0.4 + Math.random() * 1.2, t.z + (Math.random() - 0.5) * 1.4, 0, 1.2 + Math.random(), 0, 0.9, '+', [110, 230, 130], -0.5, 1); }
         break;
+      }
       case 'throw': {
         const path = WD.throwPath(m.o, m.v, null);
         this.projectiles.push({ by: m.id, o: m.o, v: m.v, t: 0, end: path.t + 0.05 });
@@ -262,8 +269,25 @@ export class Game {
         if (i >= 0) this.projectiles.splice(i, 1);
         this.addFire(m);
         const [pan, vol] = this.spatial(m.x, m.z);
+        if (m.patch) {
+          // a splash of burning liquid lands: a small burst of embers
+          for (let k = 0; k < 6; k++) this.spawn(m.x, m.y + 0.15, m.z, (Math.random() - 0.5) * 2.5, 1 + Math.random() * 2, (Math.random() - 0.5) * 2.5, 0.35 + Math.random() * 0.3, FIRE_CH[k % FIRE_CH.length], [255, 150 + Math.random() * 80, 40], 10);
+          if (Math.random() < 0.4 && vol > 0.2) A.crackle(pan, vol * 0.5);
+          break;
+        }
         A.glass(pan, vol); A.whoosh(pan, vol);
+        // glass shards
         for (let k = 0; k < 14; k++) this.spawn(m.x, m.y + 0.3, m.z, (Math.random() - 0.5) * 6, Math.random() * 4, (Math.random() - 0.5) * 6, 0.5 + Math.random() * 0.4, '\'`.,'[k % 4], [150, 200, 140], 14);
+        // burning fuel sprays out — mostly forward in the throw direction — and rains down as droplets of fire
+        const dx = m.dx || 0, dz = m.dz || 0;
+        for (let k = 0; k < 46; k++) {
+          const fwd = Math.random() < 0.7, ang = (Math.random() - 0.5) * (fwd ? 1.4 : 6.2), sp = 2 + Math.random() * (fwd ? 6 : 3.5);
+          const ca = Math.cos(ang), sa = Math.sin(ang), vx = (dx * ca - dz * sa) * sp, vz = (dx * sa + dz * ca) * sp;
+          const hot = Math.random();
+          this.spawn(m.x, m.y + 0.25, m.z, fwd || dx || dz ? vx : (Math.random() - 0.5) * 6, 1.5 + Math.random() * 3.5, fwd || dx || dz ? vz : (Math.random() - 0.5) * 6,
+            0.45 + Math.random() * 0.55, FIRE_CH[k % FIRE_CH.length], hot > 0.5 ? [255, 210, 90] : [255, 120, 30], 12, 1);
+        }
+        this.lights.push({ x: m.x, y: m.y + 0.8, z: m.z, t: 0.35, max: 0.35, k: 1.4 });
         break;
       }
       case 'push':
@@ -648,7 +672,8 @@ export class Game {
     };
     this.fires.forEach((f, fi) => {
       const k = Math.min(1, f.life / 1.2) * Math.min(1, (f.max - f.life) / 0.25 + 0.3);
-      for (let i = 0; i < 44; i++) {
+      const nt = Math.max(5, Math.round(34 * f.r * f.r / 1.3));       // more tongues on a bigger pool
+      for (let i = 0; i < nt; i++) {
         const h1 = hash(fi * 13.1 + f.x, i), h2 = hash(i, fi + f.z), h3 = hash(i * 1.7, 3.3);
         const r = Math.sqrt(h1) * f.r * 0.95, a = h2 * Math.PI * 2;
         const ph = (T * (0.8 + h3 * 0.7) + h3) % 1;
@@ -694,7 +719,7 @@ export class Game {
       f.life -= dt;
       if (f.life <= 0) { this.fires.splice(i, 1); continue; }
       const k = Math.min(1, f.life / 1.2) * Math.min(1, (f.max - f.life) / 0.25 + 0.3);
-      const want = dt * 150 * k, n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+      const want = dt * 110 * k * Math.min(1.2, f.r * f.r / 1.3 + 0.15), n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
       for (let j = 0; j < n; j++) {
         const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * f.r;
         const hot = Math.random(), edge = r / f.r;
@@ -830,7 +855,7 @@ export class Game {
         const before = wp.use;
         wp.use += dt / WD.WEAPONS.medkit.use;
         if (before < 0.12 && wp.use >= 0.12) A.zip();
-        if (before < 0.55 && wp.use >= 0.55) net.send({ t: 'medkit' });
+        if (before < 0.55 && wp.use >= 0.55) net.send({ t: 'medkit', d: this.lookDir() });   // aim at a teammate to heal them
         if (wp.use >= 1) wp.use = -1;
       }
       if (fire && ready && wp.use < 0 && wp.medCD <= 0 && inp.mouseClicked[0]) { wp.use = 0; wp.medCD = this.dev && this.dev.ammo ? 1.5 : WD.WEAPONS.medkit.cooldown; }
@@ -864,7 +889,7 @@ export class Game {
         const at = v => before < v && wp.drink >= v;
         if (at(0.04)) A.canOpen();
         if (at(0.3) || at(0.45) || at(0.6)) A.gulp();
-        if (at(0.62)) net.send({ t: 'drink' });
+        if (at(0.62)) net.send({ t: 'drink', d: this.lookDir() });
         if (wp.drink >= 1) wp.drink = -1;
       }
       if (fire && ready && wp.drinkCD <= 0 && wp.drink < 0 && inp.mouseClicked[0]) { wp.drink = 0; wp.drinkCD = 7; }

@@ -185,7 +185,7 @@ export const MODES = [
   { id: 'dark', name: 'BLACKOUT', ru: 'тьма', time: '5:00', players: '2-8 pl', ready: true,
     icon: ['  .   .  ', '    *    ', '  .   .  '],
     desc: ['total darkness. only shots', 'and flashlights give light.', 'F = your flashlight.'] },
-  { id: 'zombie', name: 'ZOMBIES', ru: 'зомби', time: '50 waves', players: 'solo / party', ready: true,
+  { id: 'zombie', name: 'ZOMBIES', ru: 'зомби', time: '25 waves', players: 'solo / party', ready: true,
     icon: ['  (x x)  ', '  /|=|\\  ', ' _/   \\_ '],
     desc: ['hold off waves of zombies,', 'alone or with your party.', '+1★ a zombie · wave bonus.'] },
 ];
