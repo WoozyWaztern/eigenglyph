@@ -98,7 +98,7 @@ const MIME = {
 const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.7' })); }
+  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.8' })); }
   if (url === '/api/prefs') {   // local settings store (only for the player on this PC)
     const ra = req.socket.remoteAddress || '';
     if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) { res.writeHead(403); return res.end(); }

@@ -11,6 +11,16 @@ import { placeItem, drawItemIcon, PISTOLS } from './items.js';
 const SLOTS = ['SHOTGUN', 'KNIFE', 'SODA', 'AK-47', 'PISTOL', 'H.KNIFE', 'BAT', 'MOLOTOV', 'MEDKIT', 'MAKAROV', 'DEAGLE'];
 // full magazines for every gun (index → rounds)
 const fullMags = () => Object.fromEntries(WD.ITEMS.map((it, i) => [i, it.kind === 'gun' ? WD.WEAPONS[it.id].mag : 0]).filter(e => e[1]));
+// radius of a sphere around (cx,cy,cz) that contains every part of a model (for the renderer's quick test)
+function tightR(prims, cx, cy, cz) {
+  let r = 0;
+  for (const p of prims) {
+    const ext = p.type === SPHERE ? p.sx : Math.hypot(p.sx, p.sy || p.sx, p.sz) + (p.sx || 0);
+    const d = Math.hypot(p.px - cx, p.py - cy, p.pz - cz) + ext;
+    if (d > r) r = d;
+  }
+  return r + 0.05;
+}
 const KF_ICON = { zombie: ' >(x)< ', dev: ' {dev} ', shotgun: ' =[==> ', knife: ' -|--> ', ak47: ' =|===- ', pistol: ' r=- ', makarov: ' r=- ', deagle: ' r==- ', hknife: ' =||==> ', bat: ' (====) ', fire: ' ~^~^~ ' };
 const MELEE_T = { 5: 0.42, 6: 0.62 };         // swing animation length
 const FIRE_CH = '^*\'",.';
@@ -47,7 +57,7 @@ export class Game {
     this.paused = false;
     this.others = new Map();
     this.particles = [];
-    this.floorDecals = new Map();
+    this.floorDecals = new Map(); this.decalQ = [];
     this.chatLog = [];
     this.chatOpen = false; this.chatText = '';
     this.killfeed = [];
@@ -293,13 +303,20 @@ export class Game {
 
   // ───────────────────────── particles ─────────────────────────
   spawn(x, y, z, vx, vy, vz, life, ch, col, grav = 0, size = 1, blood = false) {
-    if (this.particles.length > 1400) this.particles.shift();
+    if (this.particles.length > 700) return { tall: false };          // enough on screen already: skip (cheap)
     const p = { x, y, z, vx, vy, vz, life, max: life, ch, col, grav, size, blood, hole: false, tall: false };
     this.particles.push(p);
     return p;
   }
   addDecal(x, z, r) {
     const d = [x, z, r];
+    // keep the floor blood limited (it is sent to the render workers every frame)
+    this.decalQ = this.decalQ || [];
+    this.decalQ.push(d);
+    if (this.decalQ.length > 500) {
+      const old = this.decalQ.shift();
+      for (const [k, l] of this.floorDecals) { const i = l.indexOf(old); if (i >= 0) { l.splice(i, 1); if (!l.length) this.floorDecals.delete(k); } }
+    }
     for (let gx = Math.floor(x - r); gx <= Math.floor(x + r); gx++)
       for (let gz = Math.floor(z - r); gz <= Math.floor(z + r); gz++) {
         const k = gx + gz * 1000;
@@ -445,7 +462,7 @@ export class Game {
       o.stepAcc += moved;
       if (o.stepAcc > 2.2 && o.y < 0.05 + Math.floor(o.y + 0.5)) { o.stepAcc = 0; const [pan, vol] = this.spatial(o.x, o.z); if (vol > 0.25) A.step(pan, vol * 0.7); }
       o.shootT += dt; o.knifeT += dt; o.drinkT += dt; o.deadT += dt; o.throwT += dt; o.useT += dt;
-      if (o.burn && !o.dead) this.burnParticles(o.x, o.y, o.z, dt, 1);
+      if (o.burn && !o.dead) this.burnParticles(o.x, o.y, o.z, dt, this.nBurning > 3 ? 2 / this.nBurning : 0.5);
       for (const b of o.bubbles) b.t += dt;
       o.bubbles = o.bubbles.filter(b => b.t < 6);
     }
@@ -454,21 +471,26 @@ export class Game {
     this.updateFire(dt);
 
     // ── particles ──
+    // (compacted in place — no splice, so hundreds of particles stay cheap)
     const P = this.particles;
-    for (let i = P.length - 1; i >= 0; i--) {
+    let keep = 0;
+    for (let i = 0; i < P.length; i++) {
       const p = P[i];
       p.life -= dt;
-      if (p.life <= 0) { P.splice(i, 1); continue; }
-      if (p.hole) continue;
-      p.vy -= p.grav * dt;
-      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
-      if (p.blood && (p.y <= 0.02 || WD.solid(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)))) {
-        if (p.y < 0.3 || WD.solid(Math.floor(p.x), Math.floor(p.y - 0.05), Math.floor(p.z))) {
-          if (Math.random() < 0.5) this.addDecal(p.x, p.z, 0.08 + Math.random() * 0.14);
+      if (p.life <= 0) continue;
+      if (!p.hole) {
+        p.vy -= p.grav * dt;
+        p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+        if (p.blood && (p.y <= 0.02 || WD.solid(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)))) {
+          if (p.y < 0.3 || WD.solid(Math.floor(p.x), Math.floor(p.y - 0.05), Math.floor(p.z))) {
+            if (Math.random() < 0.5) this.addDecal(p.x, p.z, 0.08 + Math.random() * 0.14);
+          }
+          continue;
         }
-        P.splice(i, 1);
       }
+      P[keep++] = p;
     }
+    P.length = keep;
 
     // ── send state ──
     this.sendT -= dt;
@@ -626,9 +648,12 @@ export class Game {
       const cp = Math.cos(o.pitch || 0);
       out.push({ x: o.x - Math.sin(o.yaw) * cp * 0.8, y: o.y + WD.EYE - 0.1, z: o.z - Math.cos(o.yaw) * cp * 0.8, life: 1, max: 1, ch: '@', col: [255, 248, 210], size: 2, hole: false });
     }
+    let nb = 0; for (const o of players) if (o.burn && !o.dead) nb++;
+    this.nBurning = nb;
+    const per = nb > 6 ? 5 : nb > 3 ? 7 : 10;    // a burning crowd: fewer tongues each
     for (const o of players) {
       if (!o.burn || o.dead) continue;   // your own flames are drawn on the screen instead
-      for (let i = 0; i < 16; i++) {
+      for (let i = 0; i < per; i++) {
         const h1 = hash(o.id * 7.7, i), h2 = hash(i, o.id), h3 = hash(i * 2.3, 9.1);
         const a = h2 * Math.PI * 2 + T * 0.5, r = 0.35 + h1 * 0.35;
         const ph = (T * (1.1 + h3) + h3) % 1;
@@ -893,7 +918,7 @@ export class Game {
       const sw2 = Math.sin(o.walk * 0.8) * 0.12;
       R = W([0.5, 0.05 + sw2, 0.95]); L = W([-0.5, 0.05 - sw2, 0.95]);
       sph(R[0], R[1], R[2], 0.22, M.ARM); sph(L[0], L[1], L[2], 0.22, M.ARM);
-      o.bx = cx; o.by = cy; o.bz = cz; o.br = 2.0;
+      o.bx = cx; o.by = cy; o.bz = cz; o.br = tightR(out, cx, cy, cz);
       return out;
     }
     if (o.w < 0) {
@@ -973,7 +998,7 @@ export class Game {
     }
     sph(R[0], R[1], R[2], 0.22, M.ARM);
     sph(L[0], L[1], L[2], 0.22, M.ARM);
-    o.bx = cx; o.by = cy; o.bz = cz; o.br = 2.3;
+    o.bx = cx; o.by = cy; o.bz = cz; o.br = tightR(out, cx, cy, cz);
     return out;
   }
 

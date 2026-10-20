@@ -43,17 +43,25 @@ export class Input {
     });
     window.addEventListener('wheel', e => { this.wheel += Math.sign(e.deltaY); }, { passive: true });
     window.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('pointerlockerror', e => e.preventDefault && e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.canvas;
+      if (!this.locked) this.unlockedAt = performance.now();
       this.mdx = this.mdy = 0;
       if (this.onLockChange) this.onLockChange(this.locked);
     });
   }
+  // the browser refuses to re-lock the mouse ~1 s after Esc — that is not an error,
+  // the game just stays paused and the next click locks it
   lock() {
+    if (document.pointerLockElement === this.canvas) return;
+    // right after Esc the browser needs ~1 s before it allows capturing the mouse again
+    if (performance.now() - (this.unlockedAt || -1e9) < 1300) return;
+    const plain = () => { try { const q = this.canvas.requestPointerLock(); if (q && q.catch) q.catch(() => {}); } catch {} };
     try {
       const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
-      if (p && p.catch) p.catch(() => { try { this.canvas.requestPointerLock(); } catch {} });
-    } catch { try { this.canvas.requestPointerLock(); } catch {} }
+      if (p && p.catch) p.catch(err => { if (!/immediately|exited/i.test(String(err && err.message))) plain(); });
+    } catch { plain(); }
   }
   unlock() { if (document.pointerLockElement) document.exitPointerLock(); }
   get cell() { return this.screen.cellFromPx(this.mx, this.my); }

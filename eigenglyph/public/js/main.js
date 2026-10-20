@@ -148,6 +148,21 @@ class App {
     this.signOutLocal();
     this.net.send({ t: 'logout' });   // the connection stays open — the server signs it out instantly
   }
+  // AUTO QUALITY: if the 3D view takes too long (big fights, fire, slow PC) the detail drops one step,
+  // and goes back up to the chosen level once there is time to spare again
+  autoDetail(dt) {
+    const R = this.renderer, ms = R.workers ? R.wAvg : R.mAvg;
+    if (!ms) return;
+    const want = this.settings.detail || 2, cur = this.scr.detail;
+    this.slowT = ms > 48 ? (this.slowT || 0) + dt : 0;        // under ~20 fps
+    this.fastT = ms < 16 ? (this.fastT || 0) + dt : 0;        // over ~60 fps
+    if (this.slowT > 1.5 && cur > 1) {
+      this.scr.setDetail(cur - 1); this.slowT = 0; this.fastT = -8; R.wAvg = R.mAvg = 0; R.latest = null;
+      const cm = this.game.centerMsg; if (!cm || cm.t <= 0) this.game.centerMsg = { text: 'auto quality: detail lowered for smoother fps', t: 2 };
+    } else if (this.fastT > 6 && cur < want) {
+      this.scr.setDetail(cur + 1); this.fastT = -8; R.wAvg = R.mAvg = 0; R.latest = null;
+    }
+  }
   // rank went up since the last time this browser saw it → play the rank-up animation in the lobby.
   // Several ranks at once (dev: rank eigen) → only the last change is shown.
   checkRank(login) {
@@ -210,6 +225,7 @@ class App {
     this.input.lock();
   }
   leaveGame() {
+    if (this.scr.detail !== (this.settings.detail || 2)) this.scr.setDetail(this.settings.detail || 2);   // undo auto quality
     this.net.send({ t: 'leave' });
     this.game.stop();
     this.input.unlock();
@@ -228,6 +244,7 @@ class App {
     if (this.state === 'game' && this.game.active) {
       this.game.update(dt);
       this.game.draw(dt);
+      this.autoDetail(dt);
     } else {
       if (this.state === 'login') { scr.fine.clear(...C.bg); this.drawBackground(); this.drawLogin(); }
       else {
@@ -374,7 +391,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'Eigenyth v1.7 · everything here is a character';
+    const r = 'Eigenyth v1.8 · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }
@@ -406,7 +423,10 @@ function syncPrefs() {
 
 // if anything crashes, say so on the screen instead of a frozen black window
 let errShown = false;
+// the browser refuses to capture the mouse right after Esc — harmless (the game stays paused, the next click works)
+const harmless = e => /pointer ?lock|exited the lock|requestPointerLock/i.test(String((e && (e.message || e.name)) || e));
 function showError(e) {
+  if (harmless(e)) { console.warn('ignored:', e && e.message || e); return; }
   console.error(e);
   if (errShown) return; errShown = true;
   const d = document.createElement('pre');
@@ -415,7 +435,11 @@ function showError(e) {
   document.body.appendChild(d);
 }
 window.addEventListener('error', ev => showError(ev.error || ev.message));
-window.addEventListener('unhandledrejection', ev => showError(ev.reason));
+window.addEventListener('unhandledrejection', ev => {
+  // mouse capture refused by the browser (clicked too soon after Esc) — harmless, just click again
+  if (/pointer ?lock|exited the lock/i.test(String(ev.reason && ev.reason.message || ev.reason))) { ev.preventDefault(); return; }
+  showError(ev.reason);
+});
 
 // ── "install as app": the browser can install the game with its own window and icon ──
 window.installPrompt = null;

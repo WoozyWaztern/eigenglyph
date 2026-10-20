@@ -42,6 +42,7 @@ export class ViewModel {
     let n = 0;
     const out = this.prims; out.length = 0;
     const P = () => { const p = POOL[n++]; out.push(p); return p; };
+    let handN = 0;
 
     // global offsets: bob, breathing, sway, equip
     const bx = Math.cos(st.bob) * 0.014 * st.bobAmp * (1 - st.ads * 0.8);
@@ -73,13 +74,13 @@ export class ViewModel {
       setDirZ(p.m, dx, dy, dz);
     };
     const hand = (x, y, z, r = 0.068) => {
-      const p = P(); p.type = SPHERE; p.mat = M.ARM; p.sx = r; p.tag = 0;
+      const p = P(); p.type = SPHERE; p.mat = M.ARM; p.sx = r; p.tag = 10 + (handN++ % 6);
       p.px = x; p.py = y; p.pz = z; p.m.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
       return [x, y, z];
     };
     // a closed fist wrapped around a grip: a short capsule from a to b
     const fist = (a, b, r) => {
-      const p = P(); p.type = CAPSULE; p.mat = M.ARM; p.sx = r; p.tag = 0;
+      const p = P(); p.type = CAPSULE; p.mat = M.ARM; p.sx = r; p.tag = 10 + (handN++ % 6);   // own outline, same color
       const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
       p.sz = Math.hypot(dx, dy, dz) / 2;
       p.px = (a[0] + b[0]) / 2; p.py = (a[1] + b[1]) / 2; p.pz = (a[2] + b[2]) / 2;
@@ -169,7 +170,7 @@ export class ViewModel {
       const ak = st.w === 3, G = PISTOLS[st.w], heavy = st.w === 10;
       const a = sm(st.ads);
       const rel = st.reload, rl = rel >= 0 ? sm(Math.min(1, st.reloadBlend)) : 0;
-      let pos = ak ? lerp3([0.19, -0.2, 0.56], [0.0, -0.075, 0.6], a) : lerp3([0.14, -0.115, 0.52], [0.0, -0.07, 0.52], a);
+      let pos = ak ? lerp3([0.19, -0.2, 0.56], [0.0, -0.075, 0.6], a) : lerp3([0.12, -0.14, 0.5], [0.0, -0.075, 0.5], a);
       pos = lerp3(pos, ak ? [0.14, -0.19, 0.56] : [0.08, -0.13, 0.42], rl);
       const [ay, ap] = aimAngles(pos, ak ? 0 : G.by * G.S);
       const kick = st.recoil * (ak ? 0.6 : heavy ? 1.7 : 1);
@@ -209,24 +210,35 @@ export class ViewModel {
         arm(lh[0], lh[1], lh[2], -0.05 + ox * 0.5, -0.9 + oy * 0.5, 0.28);
         this.muzzle = world(pos, R, 0, 0.0, 0.56);
       } else {
-        // two-hand (thumbs-forward) grip: the right hand wraps the grip high under the slide,
-        // the support hand wraps the right hand's fingers from the left side
-        // fingers wrap the whole (short) grip: each hand is a fist along the grip axis
+        // two-hand "thumbs forward" grip (how pistols are really held):
+        //  · the right hand sits HIGH on the back of the grip (web of the hand under the slide) —
+        //    from behind you see the back of that hand, the grip itself is hidden
+        //  · the left palm fills the left side, its fingers wrap over the right hand's fingers at the front
+        //  · both thumbs lie along the left side of the frame, pointing at the target
+        //  · the wrists go straight back along the forearms (barrel in line with the forearm)
         const g = G.grip, ux = Math.cos(G.tilt), uz = Math.sin(G.tilt);
         const gx = (dx, along, dz) => world(pos, R, (g[0] + dx) * S, (g[1] + along * ux) * S, (g[2] + along * uz + dz) * S);
-        const k = G.hh * 0.62;
-        const rh = gx(G.gw * 0.9, 0, -0.006);
-        fist(gx(G.gw * 0.9, k, -0.006), gx(G.gw * 0.9, -k, -0.006), 0.034);
-        arm(rh[0], rh[1], rh[2], 0.24 + ox * 0.5, -0.46 + oy * 0.5, -0.04, 0.033);   // forearm toward the right shoulder
-        let lh = gx(-G.gw * 1.3, -0.004, 0.006);
+        const fr = (x, y, z) => world(pos, R, x * S, y * S, z * S);        // frame coordinates (not tilted)
+        const k = G.hh * 0.6, gw = G.gw, gd = G.gd;
+        // right hand around the backstrap
+        fist(gx(gw * 0.3, k, -gd * 0.5), gx(gw * 0.3, -k * 0.95, -gd * 0.5), (gw + 0.012) * S);
+        const rWrist = gx(gw * 0.3, -k * 0.5, -gd - 0.025);
+        arm(rWrist[0], rWrist[1], rWrist[2], 0.2 + ox * 0.5, -0.42 + oy * 0.5, -0.06, 0.03);
+        // right thumb along the left side, high under the slide
+        fist(fr(-gw - 0.001, G.fy + 0.005, g[2] - 0.006), fr(-gw - 0.002, G.fy + 0.006, g[2] + 0.03), 0.0062 * S);
+        let lh = gx(-gw * 1.05, -k * 0.15, gd * 0.25);
         const lhRest = lh;
         if (rel >= 0) {
-          const k = rel < 0.2 ? sm(rel / 0.2) : rel < 0.75 ? 1 : 1 - sm((rel - 0.75) / 0.25);
-          lh = lerp3(lh, world(pos, R, -0.02, -0.28, -0.08), k);
+          const kk = rel < 0.2 ? sm(rel / 0.2) : rel < 0.75 ? 1 : 1 - sm((rel - 0.75) / 0.25);
+          lh = lerp3(lh, world(pos, R, -0.02, -0.28, -0.08), kk);
         }
-        if (lh === lhRest) fist(gx(-G.gw * 1.3, k * 0.85, 0.006), gx(-G.gw * 1.3, -k * 0.9, 0.006), 0.032);
-        else hand(lh[0], lh[1], lh[2], 0.038);
-        arm(lh[0], lh[1], lh[2], -0.16 + ox * 0.5, -0.48 + oy * 0.5, -0.04, 0.033);  // forearm toward the left shoulder
+        if (lh === lhRest) {
+          fist(gx(-gw * 1.05, k * 0.7, gd * 0.15), gx(-gw * 1.05, -k * 0.95, gd * 0.15), (gw + 0.007) * S);   // left palm
+          fist(gx(gw * 0.15, k * 0.5, gd * 0.95), gx(gw * 0.15, -k * 0.95, gd * 0.95), 0.011 * S);           // left fingers over the front
+          fist(fr(-gw - 0.004, G.fy - 0.004, g[2] + 0.004), fr(-gw - 0.004, G.fy - 0.003, g[2] + 0.046), 0.0066 * S);   // left thumb
+        } else hand(lh[0], lh[1], lh[2], 0.034);
+        const lWrist = lh === lhRest ? gx(-gw * 1.3, -k * 0.5, -gd * 0.5) : lh;
+        arm(lWrist[0], lWrist[1], lWrist[2], -0.15 + ox * 0.5, -0.44 + oy * 0.5, -0.06, 0.03);
         this.muzzle = world(pos, R, 0, G.by * S, (G.mz + 0.005) * S);
       }
     }

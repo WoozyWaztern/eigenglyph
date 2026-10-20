@@ -75,15 +75,21 @@ export class Renderer {
     if (!this.workers) return false;
     const { cols, rows } = C, n = this.workers.length;
     if (!this.job) {
-      const id = ++this.jobId, per = Math.ceil(rows / n);
+      // interleaved rows (worker k traces rows k, k+n, k+2n…): a player or fire in one part of
+      // the screen no longer lands on a single worker, so the load stays even
+      const id = ++this.jobId;
       this.job = { id, cols, rows, bands: new Array(n), done: 0, t0: performance.now() };
-      this.workers.forEach((w, k) => w.postMessage({ id, k, y0: Math.min(rows, k * per), y1: Math.min(rows, (k + 1) * per), C }));
+      this.workers.forEach((w, k) => w.postMessage({ id, k, y0: k, y1: rows, step: n, C }));
     }
     const L = this.latest;
     if (!L || L.cols !== cols || L.rows !== rows) return false;   // first frame / resize: trace here once
     for (const b of L.bands) {
-      const off = b.y0 * cols;
-      A.set(b.A, off * 4); B.set(b.B, off * 4); depth.set(b.depth, off); vmId.set(b.vmId, off);
+      const st = b.step || 1;
+      for (let j = 0, y = b.y0; y < rows; j++, y += st) {
+        const s0 = j * cols, off = y * cols;
+        A.set(b.A.subarray(s0 * 4, (s0 + cols) * 4), off * 4); B.set(b.B.subarray(s0 * 4, (s0 + cols) * 4), off * 4);
+        depth.set(b.depth.subarray(s0, s0 + cols), off); vmId.set(b.vmId.subarray(s0, s0 + cols), off);
+      }
     }
     return true;
   }
@@ -116,7 +122,8 @@ export class Renderer {
     Object.assign(this.cam, { f: [fx, fy, fz], r: [rx, ry, rz], u: [ux, uy, uz], tanX, tanY, pos: [ox, oy, oz], vmTanX, vmTanY });
 
     const flash = scene.flash || 0;
-    const players = scene.players;
+    // nearest first: once a close player is hit, the ones behind it are rejected by one cheap test
+    const players = scene.players.slice().sort((a, b) => ((a.bx - ox) ** 2 + (a.by - oy) ** 2 + (a.bz - oz) ** 2) - ((b.bx - ox) ** 2 + (b.by - oy) ** 2 + (b.bz - oz) ** 2));
     const np = players.length;
 
     // ── screen rectangles for players ──
@@ -128,11 +135,14 @@ export class Renderer {
       const d = Math.hypot(vx, vy, vz);
       if (d < p.br + 0.3) { rects[i * 4] = 0; rects[i * 4 + 1] = cols; rects[i * 4 + 2] = 0; rects[i * 4 + 3] = rows; continue; }
       if (zz < -p.br) { rects[i * 4] = 1; rects[i * 4 + 1] = 0; continue; }
-      const z = Math.max(zz, 0.2);
+      // tight screen box of the bounding sphere (angular radius); very close → whole screen
+      if (zz < p.br * 1.15) { rects[i * 4] = 0; rects[i * 4 + 1] = cols; rects[i * 4 + 2] = 0; rects[i * 4 + 3] = rows; continue; }
+      const z = zz;
       const sxc = (vx * rx + vy * ry + vz * rz) / z / tanX;
       const syc = (vx * ux + vy * uy + vz * uz) / z / tanY;
-      const k = z < p.br * 2 ? 3 : 1.25;
-      const radX = p.br / (z * tanX) * k, radY = p.br / (z * tanY) * k;
+      const ang = p.br / Math.sqrt(z * z - p.br * p.br);           // tan of the angular radius
+      const off = Math.abs(sxc) * tanX, offY = Math.abs(syc) * tanY;  // off-center spheres project wider
+      const radX = ang * (1 + off * off) / tanX * 1.1 + 0.02, radY = ang * (1 + offY * offY) / tanY * 1.1 + 0.02;
       rects[i * 4] = Math.floor((sxc - radX + 1) / 2 * cols) - 1;
       rects[i * 4 + 1] = Math.ceil((sxc + radX + 1) / 2 * cols) + 1;
       rects[i * 4 + 2] = Math.floor((1 - (syc + radY)) / 2 * rows) - 1;
@@ -159,11 +169,14 @@ export class Renderer {
     const A = scr.A, B = scr.B;
     const decals = scene.floorDecals; // Map cellKey -> [[x,z,r], ...]
 
+    // bounding radius of every model part (lets the tracer skip most of them per cell)
+    for (const q of vm) q.bR = q.type === 0 ? q.sx : Math.hypot(q.sx, q.sy || q.sx, q.sz) + (q.type === 1 ? 0 : q.sx);
+    for (const p of players) for (const q of p.prims) q.bR = q.type === 0 ? q.sx : Math.hypot(q.sx, q.sy || q.sx, q.sz) + (q.type === 1 ? 0 : q.sx);
     const fires = (scene.fires || []).map(f => [f.x, f.y, f.z, f.r, Math.min(1, f.life / 1.2) * Math.min(1, (f.max - f.life) / 0.25 + 0.3)]);
     const C = { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, gFire, fires, time: scene.time || 0, ox, oy, oz,
       dark: scene.dark || null, zones: scene.zones || null, fx, fy, fz, rx, ry, rz, ux, uy, uz,
       tanX, tanY, vmTanX, vmTanY, flash, rects, vx0, vx1, vy0, vy1, decals: decals || new Map(),
-      players: players.map(p => ({ prims: p.prims, tint: p.tint, wounds: p.wounds, yaw: p.yaw, dead: p.dead, x: p.x, z: p.z, y: p.y, burn: p.burn, zombie: p.zombie, sigma: p.sigma })),
+      players: players.map(p => ({ prims: p.prims, tint: p.tint, wounds: p.wounds, yaw: p.yaw, dead: p.dead, x: p.x, z: p.z, y: p.y, burn: p.burn, zombie: p.zombie, sigma: p.sigma, bx: p.bx, by: p.by, bz: p.bz, br: p.br })),
       vm };
     if (!this.useWorkers(C, A, B, depth, vmId)) {
       const t0 = performance.now();
@@ -253,8 +266,9 @@ export class Renderer {
 const FL_CH = ['@', '#', '*', '*', '^', '^', '!', "'", "'"];
 function drawFlame(scr, depth, cols, rows, cx, cy, dist, p, tanY) {
   const perUnit = rows / (2 * tanY * dist);           // screen cells per world unit at this distance
-  const h = Math.max(1, Math.round(p.flame * perUnit));
-  const w = Math.max(1, Math.round(p.fw * perUnit));
+  // capped: a flame right in front of the camera must not cover thousands of cells
+  const h = Math.max(1, Math.min(rows >> 2, Math.round(p.flame * perUnit)));
+  const w = Math.max(1, Math.min(9, Math.round(p.fw * perUnit)));
   const a = p.life, fog = Math.exp(-dist * 0.03);
   for (let k = 0; k < h; k++) {
     const yy = cy - k;
@@ -276,7 +290,7 @@ function drawFlame(scr, depth, cols, rows, cx, cy, dist, p, tanY) {
 
 // ── the per-cell ray tracer: rows y0..y1 of the screen; writes into band buffers
 //    (index = cell - base). Runs on the main thread or inside render workers.
-export function traceRows(C, y0, y1, base, A, B, depth, vmId) {
+export function traceRows(C, y0, y1, base, A, B, depth, vmId, step = 1) {
   const { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, gFire, fires, time, ox, oy, oz, fx, fy, fz, rx, ry, rz, ux, uy, uz,
     tanX, tanY, vmTanX, vmTanY, flash, players, rects, vm, vx0, vx1, vy0, vy1, decals } = C;
   const nf = fires ? fires.length : 0, tStep = Math.floor((time || 0) * 14);
@@ -307,11 +321,11 @@ export function traceRows(C, y0, y1, base, A, B, depth, vmId) {
   const scr = { setCell(i, gi, fr, fg, fb, br, bg, bb) {
     const j = i << 2; A[j] = fr; A[j + 1] = fg; A[j + 2] = fb; A[j + 3] = gi & 255; B[j] = br; B[j + 1] = bg; B[j + 2] = bb; B[j + 3] = gi >> 8;
   } };
-for (let cy = y0; cy < y1; cy++) {
+for (let cy = y0, row = 0; cy < y1; cy += step, row++) {
     const sy = 1 - (cy + 0.5) / rows * 2;
     for (let cx = 0; cx < cols; cx++) {
       const sx = (cx + 0.5) / cols * 2 - 1;
-      const idx = cy * cols + cx - base;
+      const idx = step === 1 ? cy * cols + cx - base : row * cols + cx;
       let mat = 0, nx = 0, ny = 0, nz = 0, t = 1e9, lum = 0, glyph = -1;
       let col0 = 0, col1 = 0, col2 = 0, spec = 0;
       let isVM = false, owner = null, lhz = 0;
@@ -323,11 +337,20 @@ for (let cy = y0; cy < y1; cy++) {
         const l = 1 / Math.hypot(dxv, dyv, dzv); dxv *= l; dyv *= l; dzv *= l;
         let best = 1e9, bp = null, bk = -1, bnx = 0, bny = 0, bnz = 0, blz = 0;
         for (let k = 0; k < nvm; k++) {
-          const tt = hitPrim(vm[k], 0, 0, 0, dxv, dyv, dzv);
+          const q = vm[k];
+          // quick sphere test (camera at the origin) before the exact one
+          const qb = -(q.px * dxv + q.py * dyv + q.pz * dzv), qc = q.px * q.px + q.py * q.py + q.pz * q.pz - q.bR * q.bR;
+          if (qc > 0 && (qb > 0 || qb * qb < qc || -qb - Math.sqrt(qb * qb - qc) > best)) continue;
+          if (q.type === 0) {        // sphere (hands): its quick test above is already the exact one
+            const tt = -qb - Math.sqrt(qb * qb - qc);
+            if (tt > 0 && tt < best) { best = tt; bp = q; bk = k; const r = q.sx; bnx = (dxv * tt - q.px) / r; bny = (dyv * tt - q.py) / r; bnz = (dzv * tt - q.pz) / r; blz = 0; }
+            continue;
+          }
+          const tt = hitPrim(q, 0, 0, 0, dxv, dyv, dzv);
           if (tt > 0 && tt < best) { best = tt; bp = vm[k]; bk = k; bnx = HIT.nx; bny = HIT.ny; bnz = HIT.nz; blz = HIT.lz; }
         }
         if (bp) {
-          isVM = true; mat = bp.mat; vmId[idx] = bp.mat === M.ARM ? 100 : SAME_ID[bp.mat] || bk;   // parts of one material blend (no seams)
+          isVM = true; mat = bp.mat; vmId[idx] = bp.mat === M.ARM ? 100 + bp.tag : SAME_ID[bp.mat] || bk;   // arms blend, hands get their own outline   // parts of one material blend (no seams)
           const b = BASE[mat];
           const ndl = Math.max(0, bnx * VLX + bny * VLY + bnz * VLZ);
           const facing = Math.max(0, -(bnx * dxv + bny * dyv + bnz * dzv));
@@ -369,9 +392,30 @@ for (let cy = y0; cy < y1; cy++) {
           const i4 = i * 4;
           if (cx < rects[i4] || cx > rects[i4 + 1] || cy < rects[i4 + 2] || cy > rects[i4 + 3]) continue;
           const pl = players[i];
+          // cheap bounding-sphere test first: most rays miss the player (or a wall is in front)
+          const cxp = ox - pl.bx, cyp = oy - pl.by, czp = oz - pl.bz;
+          const bb = cxp * dx + cyp * dy + czp * dz, cc = cxp * cxp + cyp * cyp + czp * czp - pl.br * pl.br;
+          if (cc > 0) {
+            const disc = bb * bb - cc;
+            if (disc < 0 || bb > 0) continue;                 // misses the sphere / sphere behind the camera
+            if (-bb - Math.sqrt(disc) > t) continue;          // something closer already blocks it
+          }
           const pr = pl.prims;
           for (let k = 0; k < pr.length; k++) {
-            const tt = hitPrim(pr[k], ox, oy, oz, dx, dy, dz);
+            const q = pr[k];
+            const qx = ox - q.px, qy = oy - q.py, qz = oz - q.pz;
+            const qb = qx * dx + qy * dy + qz * dz;
+            if (q.type === 0) {      // spheres (body, eyes, hands): solved right here, no matrix work
+              const r = q.sx, qc = qx * qx + qy * qy + qz * qz - r * r, h = qb * qb - qc;
+              if (h < 0) continue;
+              const tt = -qb - Math.sqrt(h);
+              if (tt > 0 && tt < t) { t = tt; mat = q.mat; nx = (qx + dx * tt) / r; ny = (qy + dy * tt) / r; nz = (qz + dz * tt) / r; owner = pl; }
+              continue;
+            }
+            // other parts: quick bounding-sphere test before the exact (slower) one
+            const qc = qx * qx + qy * qy + qz * qz - q.bR * q.bR;
+            if (qc > 0 && (qb > 0 || qb * qb < qc || -qb - Math.sqrt(qb * qb - qc) > t)) continue;
+            const tt = hitPrim(q, ox, oy, oz, dx, dy, dz);
             if (tt > 0 && tt < t) { t = tt; mat = pr[k].mat; nx = HIT.nx; ny = HIT.ny; nz = HIT.nz; owner = pl; }
           }
         }
