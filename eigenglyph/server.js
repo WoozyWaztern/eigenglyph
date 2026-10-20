@@ -98,7 +98,7 @@ const MIME = {
 const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.8' })); }
+  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '1.9' })); }
   if (url === '/api/prefs') {   // local settings store (only for the player on this PC)
     const ra = req.socket.remoteAddress || '';
     if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) { res.writeHead(403); return res.end(); }
@@ -396,6 +396,11 @@ function startMatch(room) {
   }
   broadcast(room, { t: 'matchstart', left: room.info.time || 0, mode: room.mode, score: room.score });
   if (room.mode === 'cap') broadcast(room, sigmaMsg(room));
+}
+// a round is over: after the results everyone goes back to the lobby (the next round starts with PLAY)
+function backToLobby(room) {
+  for (const p of [...room.players.values()]) { send(p.ws, { t: 'tolobby' }); leaveGame(p.c); }
+  room.match.phase = 'idle';
 }
 const rewardFor = place => place === 1 ? 50 : place <= 3 ? 20 : 10;
 function endMatch(room) {
@@ -822,17 +827,19 @@ function zombieDied(room, z, attacker, weapon) {
   }
   setTimeout(() => { if (room.zombies.delete(z.id)) broadcast(room, { t: 'leave', id: z.id }); }, 2500);
 }
-function zombieGameOver(room) {
-  if (!room.players.size) return;
-  room.match.phase = 'results'; room.match.ends = now() + 9;
+function zombieGameOver(room, won = false) {
+  if (!room.players.size || room.match.phase !== 'play') return;
+  room.match.phase = 'results'; room.match.ends = now() + 12;
+  const winBonus = won ? 500 : 0;
   for (const p of room.players.values()) {
     const st = statsOf(p.c.acc);
+    st.stars += winBonus;
     const best = room.wave > st.bestWave;
     if (best) st.bestWave = room.wave;
     st.history.unshift({ place: room.wave, mode: 'ZOMBIES', k: p.kills, d: 1, rp: 0, wave: room.wave });
     st.history = st.history.slice(0, 8);
     sendProfile(p.c);
-    send(p.ws, { t: 'zend', wave: room.wave, kills: room.zkills, stars: room.starsRun, best, bestWave: st.bestWave, next: 9, team: room.players.size });
+    send(p.ws, { t: 'zend', wave: room.wave, kills: room.zkills, stars: room.starsRun + winBonus, best, bestWave: st.bestWave, next: 12, team: room.players.size, won, max: world.ZOMBIE_WAVES });
   }
   saveSoon();
 }
@@ -862,6 +869,7 @@ function zombieTick(room, t, dt) {
       }
       saveSoon();
       broadcast(room, { t: 'wave', wave: room.wave, cleared: true, bonus });
+      if (room.wave >= world.ZOMBIE_WAVES) return zombieGameOver(room, true);   // all 50 waves survived
     }
     room.breakT = t + 6;
   }
@@ -1286,7 +1294,7 @@ setInterval(() => {
     if (room.mode === 'cap') captureTick(room, t);
     if (room.mode === 'zombie') zombieTick(room, t, dt);
     if (room.match.phase === 'play' && t > room.match.ends) endMatch(room);
-    else if (room.match.phase === 'results' && t > room.match.ends) startMatch(room);
+    else if (room.match.phase === 'results' && t > room.match.ends) { backToLobby(room); continue; }
     const snap = { t: 's', p: allTargets(room).map(p =>
       [p.id, r3(p.x), r3(p.y), r3(p.z), r3(p.yaw), r3(p.pitch), p.w, p.hp, p.dead ? 1 : 0, p.burnUntil > t ? 1 : 0, p.team, p.zombie ? 1 : 0, p.fl === 0 ? 0 : 1]) };
     if (room.mode === 'cap' && room.sigma.state === 'carried') snap.sg = [r3(room.sigma.x), r3(room.sigma.y), r3(room.sigma.z)];

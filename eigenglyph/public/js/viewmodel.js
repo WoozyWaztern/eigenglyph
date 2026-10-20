@@ -65,9 +65,9 @@ export class ViewModel {
       if (extraRot) mul3(p.m, rot, extraRot); else p.m.set(rot);
       return p;
     };
-    const arm = (hx, hy, hz, shx, shy, shz, r = 0.072) => {
+    const arm = (hx, hy, hz, shx, shy, shz, r = 0.072, tag = 0) => {
       const p = P();
-      p.type = CAPSULE; p.mat = M.ARM; p.sx = r; p.tag = 0;
+      p.type = CAPSULE; p.mat = M.ARM; p.sx = r; p.tag = tag;
       const dx = shx - hx, dy = shy - hy, dz = shz - hz;
       p.sz = Math.hypot(dx, dy, dz) / 2;
       p.px = (hx + shx) / 2; p.py = (hy + shy) / 2; p.pz = (hz + shz) / 2;
@@ -79,8 +79,8 @@ export class ViewModel {
       return [x, y, z];
     };
     // a closed fist wrapped around a grip: a short capsule from a to b
-    const fist = (a, b, r) => {
-      const p = P(); p.type = CAPSULE; p.mat = M.ARM; p.sx = r; p.tag = 10 + (handN++ % 6);   // own outline, same color
+    const fist = (a, b, r, tag) => {
+      const p = P(); p.type = CAPSULE; p.mat = M.ARM; p.sx = r; p.tag = tag ?? 10 + (handN++ % 6);   // own outline, same color
       const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
       p.sz = Math.hypot(dx, dy, dz) / 2;
       p.px = (a[0] + b[0]) / 2; p.py = (a[1] + b[1]) / 2; p.pz = (a[2] + b[2]) / 2;
@@ -266,23 +266,29 @@ export class ViewModel {
     }
     else if (st.w === 6) {
       // ───────── BASEBALL BAT ─────────  (grip point + direction of the bat)
+      // a real right-handed swing: load (bat cocked back over the right shoulder) → the hands pull
+      // forward and the bat lags behind → level sweep through contact in front → extension to the left
+      // → follow-through over the left shoulder → back to the ready stance
       const gI = [0.14, -0.16, 0.47], dI = [0.6, 1, 0.05];   // ready stance: bat up over the right shoulder
       let g = gI, d = dI;
       if (st.slash >= 0) {
-        const s = st.slash, side = st.slashSide;
-        const sx = side > 0 ? 1 : -1;
-        g = track([[0, gI], [0.22, [0.34 * sx, -0.17, 0.38]], [0.46, [0.06 * sx, -0.24, 0.44]], [0.62, [-0.3 * sx, -0.3, 0.4]], [1, gI]], s);
-        d = track([[0, dI], [0.22, [0.55 * sx, 0.8, -0.25]], [0.46, [-1 * sx, 0.16, 0.38]], [0.62, [-0.6 * sx, -0.3, -0.5]], [1, dI]], s);
+        const s = st.slash;
+        g = track([[0, gI], [0.18, [0.24, -0.1, 0.36]], [0.34, [0.15, -0.2, 0.42]], [0.46, [0.06, -0.21, 0.45]],
+          [0.6, [-0.12, -0.19, 0.42]], [0.78, [-0.18, -0.1, 0.38]], [1, gI]], s);
+        d = track([[0, dI], [0.18, [0.75, 0.55, -0.6]], [0.34, [0.95, 0.1, -0.25]], [0.46, [-0.75, 0.04, 0.65]],
+          [0.6, [-0.95, 0.08, -0.1]], [0.78, [-0.4, 0.8, -0.5]], [1, dI]], s);
       }
       g = [g[0] + ox, g[1] + oy, g[2] + oz];
       setDirZ(R, d[0], d[1] - eq * 1.4, d[2]);
-      // both hands on the taped handle, stacked and touching: left hand at the knob, right hand above it
+      // both hands closed around the taped handle, touching: left hand at the knob, right hand above it.
+      // Each hand + its forearm is one shape (no separate "glove").
       const pos = world(g, R, 0, 0, 0.25);
       n = placeItem(POOL, n, out, 6, pos, R, 1.0);
-      const rh = world(pos, R, 0, 0, -0.17), lh = world(pos, R, 0, 0, -0.255);
-      hand(rh[0], rh[1], rh[2], 0.044); hand(lh[0], lh[1], lh[2], 0.044);
-      arm(rh[0], rh[1], rh[2], 0.3 + ox * 0.5, -0.5 + oy * 0.5, -0.02, 0.035);
-      arm(lh[0], lh[1], lh[2], -0.14 + ox * 0.5, -0.52 + oy * 0.5, -0.02, 0.035);
+      const rh = world(pos, R, 0, 0, -0.17), lh = world(pos, R, 0, 0, -0.25);
+      fist(world(pos, R, 0, 0, -0.2), world(pos, R, 0, 0, -0.145), 0.03, 1);
+      fist(world(pos, R, 0, 0, -0.28), world(pos, R, 0, 0, -0.225), 0.03, 2);
+      arm(rh[0], rh[1], rh[2], 0.3 + ox * 0.5, -0.5 + oy * 0.5, -0.02, 0.033, 1);
+      arm(lh[0], lh[1], lh[2], -0.14 + ox * 0.5, -0.52 + oy * 0.5, -0.02, 0.033, 2);
       this.muzzle = world(pos, R, 0, 0, 0.45);
     }
     else if (st.w === 7) {

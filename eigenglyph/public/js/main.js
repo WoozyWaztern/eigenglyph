@@ -88,7 +88,6 @@ class App {
           if (m.stats) this.profile = m.stats;
           this.isDev = !!m.dev;
           if (m.dev) this.dbWarn = m.db && m.db !== 'ok' ? m.db : null;
-          if (this.dbWarn) this.devLog.push({ text: `!! database: ${m.db} — accounts are NOT saved permanently (README: Upstash)`, ok: false });
           this.checkRank(true);
           this.lan = m.lan || [];
           this.net.send({ t: 'social' });
@@ -110,6 +109,9 @@ class App {
       case 'searchRes': this.searchRes = m; break;
       case 'profileView': this.viewed = m.p; break;
       case 'notice': this.lobby.notice = { text: m.text, t: 3, ok: m.ok }; break;
+      case 'tolobby':      // the round is over → back to the lobby (results were shown in the match)
+        if (this.state === 'game') { this.leaveGame(); this.lobby.tab = 0; }
+        break;
       case 'welcome':
         if (!this.creds) { this.net.send({ t: 'leave' }); break; }   // signed out meanwhile
         this.game.start(m);
@@ -250,11 +252,6 @@ class App {
       else {
         if (this.pendingRank) { this.lobby.startRankUp(this.pendingRank.from, this.pendingRank.to); this.pendingRank = null; }
         this.lobby.draw(dt);
-        // only the developer sees this: the server runs without the Upstash database → accounts get wiped on restart
-        if (this.isDev && this.dbWarn) {
-          const msg = ` !! DATABASE ${this.dbWarn.toUpperCase()} — progress is NOT saved permanently · set UPSTASH vars on render.com (README) `;
-          scr.text(Math.max(0, Math.floor(scr.cols / 2 - msg.length / 2)), scr.rows - 2, msg.slice(0, scr.cols), [255, 235, 235], [150, 30, 40]);
-        }
       }
     }
     this.devPanel();
@@ -391,7 +388,7 @@ class App {
     scr.fill(0, y, scr.cols, 1, ' ', C.dim, C.panel);
     const net = this.net.status === 'online' ? `◦ server online · ${this.online} connected` : `◦ server ${this.net.status}`;
     scr.text(2, y, net, this.net.status === 'online' ? C.dim : C.red, C.panel);
-    const r = 'Eigenyth v1.8 · everything here is a character';
+    const r = 'Eigenyth v1.9 · everything here is a character';
     scr.text(scr.cols - [...r].length - 2, y, r, C.line, C.panel);
   }
 }

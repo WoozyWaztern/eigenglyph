@@ -317,8 +317,10 @@ export const CAP_BASE_R = 3;
 export const TEAM_COL = [[214, 70, 70], [80, 130, 230]];
 export const TEAM_NAME = ['RED', 'BLUE'];
 // zombies: wave → how many, how tough, how fast
+// ZOMBIES ends after ZOMBIE_WAVES waves (clear the last one = you survived)
+export const ZOMBIE_WAVES = 50;
 export function zombieWave(n) {
-  return { count: Math.min(32, 3 + n * 2), hp: 30 + n * 12, speed: Math.min(5.4, 2.4 + n * 0.18), dmg: 8 + n * 2 };
+  return { count: Math.min(32, 3 + n * 2), hp: 30 + n * 9, speed: Math.min(5.4, 2.4 + n * 0.12), dmg: Math.min(34, 8 + n) };
 }
 
 // ── RANKS: 9 ranks × 3 divisions (I · II · III). ELO needed for one division of each rank.

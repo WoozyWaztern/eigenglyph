@@ -232,7 +232,15 @@ export class Game {
           this.addDecal(me.x, me.z, 0.9);
         } else {
           const o = this.others.get(m.victim);
-          if (o) { o.dead = true; o.deadT = 0; this.addDecal(o.x, o.z, 0.95); }
+          if (o) {
+            o.dead = true; o.deadT = 0; o.landed = false; this.addDecal(o.x, o.z, 0.95);
+            const kp = m.killer === this.myId ? me : this.others.get(m.killer);
+            let dx = kp ? o.x - kp.x : Math.sin(o.yaw), dz = kp ? o.z - kp.z : Math.cos(o.yaw);
+            const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+            // a little sideways randomness so not every body falls the same way
+            const j = (Math.random() - 0.5) * 0.7, c = Math.cos(j), s2 = Math.sin(j);
+            o.fallDir = [dx * c - dz * s2, dx * s2 + dz * c];
+          }
           if (m.killer === this.myId && !(o && o.zombie)) this.centerMsg = { text: `ELIMINATED  ${this.playerName(m.victim)}`, t: 2.2 };
         }
         break;
@@ -271,7 +279,7 @@ export class Game {
           this.hurtFlash = 0;
         } else {
           const o = this.others.get(m.id);
-          if (o) { o.x = o.tx = m.x; o.y = o.ty = m.y; o.z = o.tz = m.z; o.yaw = o.tyaw = m.yaw; o.dead = false; o.hp = 100; o.wounds = []; o.burn = false; }
+          if (o) { o.x = o.tx = m.x; o.y = o.ty = m.y; o.z = o.tz = m.z; o.yaw = o.tyaw = m.yaw; o.dead = false; o.hp = 100; o.wounds = []; o.burn = false; o.fallDir = null; o.landed = false; }
           if (m.id === this.myId) this.zend = null;
         }
         break;
@@ -462,6 +470,12 @@ export class Game {
       o.stepAcc += moved;
       if (o.stepAcc > 2.2 && o.y < 0.05 + Math.floor(o.y + 0.5)) { o.stepAcc = 0; const [pan, vol] = this.spatial(o.x, o.z); if (vol > 0.25) A.step(pan, vol * 0.7); }
       o.shootT += dt; o.knifeT += dt; o.drinkT += dt; o.deadT += dt; o.throwT += dt; o.useT += dt;
+      if (o.dead && !o.landed && o.deadT > 0.45) {      // body hits the ground: a puff of dust + a thud
+        o.landed = true;
+        const fd = o.fallDir || [0, 0], bx = o.x + fd[0] * 0.45, bz = o.z + fd[1] * 0.45;
+        for (let i = 0; i < 10; i++) { const a = Math.random() * Math.PI * 2, v = 1 + Math.random() * 1.6; this.spawn(bx + Math.cos(a) * 0.7, o.y + 0.08, bz + Math.sin(a) * 0.7, Math.cos(a) * v, 0.4 + Math.random() * 0.8, Math.sin(a) * v, 0.5 + Math.random() * 0.4, '.,`\''[i % 4], [120, 116, 108], 2, 1); }
+        const [pan, vol] = this.spatial(bx, bz); if (vol > 0.1) A.land && A.land();
+      }
       if (o.burn && !o.dead) this.burnParticles(o.x, o.y, o.z, dt, this.nBurning > 3 ? 2 / this.nBurning : 0.5);
       for (const b of o.bubbles) b.t += dt;
       o.bubbles = o.bubbles.filter(b => b.t < 6);
@@ -897,16 +911,43 @@ export class Game {
     const cx = o.x, cy = o.y + WD.BODY_CY, cz = o.z;
     let n = 0;
     const sph = (x, y, z, r, mat) => { const p = pr[n++]; p.type = SPHERE; p.px = x; p.py = y; p.pz = z; p.sx = r; p.mat = mat; p.m.set([1, 0, 0, 0, 1, 0, 0, 0, 1]); out.push(p); return p; };
-    sph(cx, cy, cz, WD.BODY_R, M.BODY);
     const dead = o.dead;
+    if (dead) {
+      // ── death: the hit knocks the body over (away from the killer), it hits the ground with a small
+      //    bounce and rolls a little; the face turns to the sky, the arms go limp. Zombies then sink away.
+      const t = o.deadT, k = clamp(t / 0.45, 0, 1), fall = k * k;                    // accelerates like a real fall
+      const lift = t < 0.3 ? Math.sin(t / 0.3 * Math.PI) * 0.14 : 0;                    // the hit lifts it a bit first
+      const bounce = t > 0.45 && t < 0.75 ? Math.sin((t - 0.45) / 0.3 * Math.PI) * 0.1 : 0;
+      const roll = t < 0.45 ? k * 0.6 : 0.6 + 0.3 * (1 - Math.exp(-(t - 0.45) * 4));      // knocked back, then rolls out
+      const fd = o.fallDir || [-fx, -fz];                                              // default: falls backwards
+      const sink = o.zombie && t > 1.1 ? Math.min(1.8, (t - 1.1) * 1.4) : 0;
+      const bx = cx + fd[0] * roll, by = o.y + WD.BODY_CY - 0.3 * fall + bounce + lift - sink, bz = cz + fd[1] * roll;
+      // tilt: rotate the body's local "up" toward the fall direction (Rodrigues around up × fd)
+      const a = Math.min(1.45, fall * 1.45 + (t > 0.45 ? Math.sin(Math.min(1, (t - 0.45) / 0.3) * Math.PI) * -0.12 : 0));
+      const ca = Math.cos(a), sa = Math.sin(a), Ax = fd[1], Az = -fd[0];                // axis = up × fd (horizontal)
+      const rot = (vx, vy, vz) => {                                                     // rotate a body-local offset
+        const d = Ax * vx + Az * vz;
+        const cxv = -Az * vy, cyv = Az * vx - Ax * vz, czv = Ax * vy;                   // A × v
+        return [vx * ca + cxv * sa + Ax * d * (1 - ca), vy * ca + cyv * sa, vz * ca + czv * sa + Az * d * (1 - ca)];
+      };
+      sph(bx, by, bz, WD.BODY_R, M.BODY);
+      for (const s of [-1, 1]) {
+        const e = rot(fx * 0.69 + rx * 0.24 * s, 0.2, fz * 0.69 + rz * 0.24 * s);
+        sph(bx + e[0], by + e[1], bz + e[2], 0.09, M.EYE);
+      }
+      // arms: flung up by the hit, then flop down to the ground beside the body
+      const fl = t < 0.25 ? t / 0.25 : Math.max(0, 1 - (t - 0.25) / 0.3);
+      for (const s of [-1, 1]) {
+        const h = rot(rx * 0.95 * s, -0.1 + fl * 0.45, rz * 0.95 * s);
+        sph(bx + h[0], Math.max(o.y + 0.2 - sink, by + h[1]), bz + h[2], 0.22, M.ARM);
+      }
+      o.bx = bx; o.by = by; o.bz = bz; o.br = tightR(out, bx, by, bz);
+      return out;
+    }
+    sph(cx, cy, cz, WD.BODY_R, M.BODY);
     // eyes
     const ey = cy + 0.2 + o.pitch * 0.12;
     for (const s of [-1, 1]) sph(cx + fx * 0.69 + rx * 0.24 * s, ey, cz + fz * 0.69 + rz * 0.24 * s, 0.09, M.EYE);
-    if (dead) {
-      for (const s of [-1, 1]) sph(cx + rx * 1.0 * s + fx * 0.3, o.y + 0.22, cz + rz * 1.0 * s + fz * 0.3, 0.24, M.ARM);
-      o.bx = cx; o.by = cy; o.bz = cz; o.br = 1.5;
-      return out;
-    }
     const swing = Math.sin(o.walk) * 0.14;
     const rec = Math.max(0, 1 - o.shootT * 5) * 0.25;
     const W = (l) => [cx + rx * l[0] + fx * l[2], cy + l[1], cz + rz * l[0] + fz * l[2]];
@@ -1182,14 +1223,14 @@ export class Game {
         scr.text(2, 1, title, C.dim);
         if (this.mode === 'zombie') {
           const alive = [...this.others.values()].filter(o => o.zombie && !o.dead).length;
-          scr.text(3 + title.length, 1, `wave ${this.wave}`, C.bright);
+          scr.text(3 + title.length, 1, `wave ${this.wave} / ${WD.ZOMBIE_WAVES}`, C.bright);
           scr.text(2, 2, `zombies ${alive} · kills ${me.kills}`, C.dim);
         } else {
           scr.text(3 + [...title].length, 1, `${mm}:${ss}`, left < 30 ? C.red : C.bright);
           scr.text(2, 2, `kills ${me.kills}`, C.dim);
         }
         if (this.mode === 'dark') scr.text(2, 3, `F · flashlight ${this.flashlight ? 'ON' : 'off'}`, this.flashlight ? [230, 220, 170] : C.line);
-      } else if (!this.zend) scr.text(2, 1, `next match in ${Math.ceil(left)}`, C.dim);
+      } else if (!this.zend) scr.text(2, 1, `back to the lobby in ${Math.ceil(left)}`, C.dim);
     }
     if (this.mode === 'cap') this.drawCaptureHUD();
     if (this.waveMsg) {
@@ -1358,14 +1399,15 @@ export class Game {
     const w = 56, h = 13;
     const x = Math.floor(scr.cols / 2 - w / 2), y = Math.floor(scr.rows / 2 - h / 2) - 4;
     scr.box(x, y, w, h, [120, 60, 50], C.panel);
-    scr.textC(y + 1, 'T H E   Z O M B I E S   G O T   Y O U', [220, 90, 70], C.panel, x + w / 2);
+    scr.box(x, y, w, h, z.won ? [200, 170, 80] : [120, 60, 50], C.panel);
+    scr.textC(y + 1, z.won ? `Y O U   S U R V I V E D   ${z.max}   W A V E S` : 'T H E   Z O M B I E S   G O T   Y O U', z.won ? [244, 214, 120] : [220, 90, 70], C.panel, x + w / 2);
     for (let i = 1; i < w - 1; i++) scr.put(x + i, y + 2, '-', C.line, C.panel);
     scr.textC(y + 4, `survived waves:  ${z.wave}`, C.bright, C.panel, x + w / 2);
     scr.textC(y + 5, `zombies killed:  ${z.kills}`, C.text, C.panel, x + w / 2);
-    scr.textC(y + 6, `stars earned:  +${z.stars} ★`, [236, 196, 92], C.panel, x + w / 2);
+    scr.textC(y + 6, `stars earned:  +${z.stars} ★${z.won ? '  (+500 victory bonus)' : ''}`, [236, 196, 92], C.panel, x + w / 2);
     scr.textC(y + 8, z.best ? `NEW BEST: wave ${z.bestWave}!` : `best: wave ${z.bestWave}`, z.best ? [110, 220, 120] : C.dim, C.panel, x + w / 2);
     const left = this.match ? Math.max(0, Math.ceil(this.match.ends - this.time)) : 0;
-    scr.textC(y + 10, `new run in ${left} · Esc → LEAVE for the lobby`, C.line, C.panel, x + w / 2);
+    scr.textC(y + 10, `back to the lobby in ${left}`, C.line, C.panel, x + w / 2);
   }
 
   drawResults() {
@@ -1393,7 +1435,7 @@ export class Game {
     });
     const note = res.ranked ? 'each kill: +4 ELO and +5 ★ · results saved to your profile' : 'need 2+ players for a ranked match';
     scr.textC(y + h - 3, note, C.dim, C.panel, x + w / 2);
-    scr.textC(y + h - 2, `next match in ${Math.max(0, Math.ceil(this.match.ends - this.time))}`, C.line, C.panel, x + w / 2);
+    scr.textC(y + h - 2, `back to the lobby in ${Math.max(0, Math.ceil(this.match.ends - this.time))}`, C.line, C.panel, x + w / 2);
   }
 
   drawScoreboard() {
