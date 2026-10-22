@@ -214,7 +214,6 @@ export class ViewModel {
         //  · the right hand sits HIGH on the back of the grip (web of the hand under the slide) —
         //    from behind you see the back of that hand, the grip itself is hidden
         //  · the left palm fills the left side, its fingers wrap over the right hand's fingers at the front
-        //  · both thumbs lie along the left side of the frame, pointing at the target
         //  · the wrists go straight back along the forearms (barrel in line with the forearm)
         const g = G.grip, ux = Math.cos(G.tilt), uz = Math.sin(G.tilt);
         const gx = (dx, along, dz) => world(pos, R, (g[0] + dx) * S, (g[1] + along * ux) * S, (g[2] + along * uz + dz) * S);
@@ -224,8 +223,6 @@ export class ViewModel {
         fist(gx(gw * 0.3, k, -gd * 0.5), gx(gw * 0.3, -k * 0.95, -gd * 0.5), (gw + 0.012) * S);
         const rWrist = gx(gw * 0.3, -k * 0.5, -gd - 0.025);
         arm(rWrist[0], rWrist[1], rWrist[2], 0.2 + ox * 0.5, -0.42 + oy * 0.5, -0.06, 0.03);
-        // right thumb along the left side, high under the slide
-        fist(fr(-gw - 0.001, G.fy + 0.005, g[2] - 0.006), fr(-gw - 0.002, G.fy + 0.006, g[2] + 0.03), 0.0062 * S);
         let lh = gx(-gw * 1.05, -k * 0.15, gd * 0.25);
         const lhRest = lh;
         if (rel >= 0) {
@@ -235,7 +232,6 @@ export class ViewModel {
         if (lh === lhRest) {
           fist(gx(-gw * 1.05, k * 0.7, gd * 0.15), gx(-gw * 1.05, -k * 0.95, gd * 0.15), (gw + 0.007) * S);   // left palm
           fist(gx(gw * 0.15, k * 0.5, gd * 0.95), gx(gw * 0.15, -k * 0.95, gd * 0.95), 0.011 * S);           // left fingers over the front
-          fist(fr(-gw - 0.004, G.fy - 0.004, g[2] + 0.004), fr(-gw - 0.004, G.fy - 0.003, g[2] + 0.046), 0.0066 * S);   // left thumb
         } else hand(lh[0], lh[1], lh[2], 0.034);
         const lWrist = lh === lhRest ? gx(-gw * 1.3, -k * 0.5, -gd * 0.5) : lh;
         arm(lWrist[0], lWrist[1], lWrist[2], -0.15 + ox * 0.5, -0.44 + oy * 0.5, -0.06, 0.03);

@@ -3,7 +3,8 @@
 //  Voxel map, raycasting, collision, body constants.
 // ─────────────────────────────────────────────────────────────
 
-export const W = 48, D = 48, H = 8;
+// the CURRENT map's size (several maps exist — setMap() switches all of these)
+export let W = 48, D = 48, H = 8;
 
 export const MAT = {
   AIR: 0, CONCRETE: 1, DARK: 2, CRATE: 3, PILLAR: 4,
@@ -133,7 +134,7 @@ export function throwStart(px, py, pz, d) {
   return { o: [px + d[0] * 0.5, py + EYE - 0.1 + d[1] * 0.5, pz + d[2] * 0.5], v: [d[0] * W.speed, d[1] * W.speed + 3.2, d[2] * W.speed] };
 }
 
-export const voxels = new Uint8Array(W * D * H);
+export let voxels = new Uint8Array(W * D * H);
 const vid = (x, y, z) => (y * D + z) * W + x;
 
 function fill(x0, z0, x1, z1, y0, y1, m) {
@@ -200,7 +201,7 @@ function build() {
 }
 build();
 
-export const SPAWNS = [];
+export let SPAWNS = [];
 (function makeSpawns() {
   const base = [[3, 10], [10, 3], [9, 15], [15, 9], [20, 13], [13, 20]];
   const set = new Set();
@@ -212,6 +213,118 @@ export const SPAWNS = [];
     }
   }
 })();
+
+// ═════════════════ MAPS ═════════════════
+// 'arena' is the classic map above. HIDE & SEEK plays on big dark maps built here.
+// Everything is generated from a fixed seed, so server, client and render workers build the same map.
+export const MAP_INFO = {
+  arena:     { name: 'ARENA' },
+  warehouse: { name: 'WAREHOUSE', hide: true },
+  offices:   { name: 'OFFICES', hide: true },
+};
+export const HIDE_MAPS = ['warehouse', 'offices'];
+const MAPS = { arena: { W, D, H, voxels, SPAWNS, SEEK: [[24, 0, 24]] } };
+export let MAP = 'arena';
+export let SEEK_SPAWNS = MAPS.arena.SEEK;
+export function setMap(id) {
+  if (!MAP_INFO[id]) id = 'arena';
+  if (id === MAP) return id;
+  let m = MAPS[id];
+  if (!m) m = MAPS[id] = makeMap(id);
+  W = m.W; D = m.D; H = m.H; voxels = m.voxels; SPAWNS = m.SPAWNS; SEEK_SPAWNS = m.SEEK; MAP = id;
+  return id;
+}
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function makeMap(id) {
+  const keep = [W, D, H, voxels];
+  const M = MAT;
+  let seek = [];
+  if (id === 'warehouse') {
+    W = 72; D = 56; H = 8; voxels = new Uint8Array(W * D * H);
+    const r = rng(7);
+    // outer walls + roof beams pillars
+    fill(0, 0, W - 1, 0, 0, 6, M.BORDER); fill(0, D - 1, W - 1, D - 1, 0, 6, M.BORDER);
+    fill(0, 0, 0, D - 1, 0, 6, M.BORDER); fill(W - 1, 0, W - 1, D - 1, 0, 6, M.BORDER);
+    // two blocks of tall shelving racks with cross aisles
+    for (let x = 6; x <= 46; x += 5) {
+      for (const [z0, z1] of [[5, 24], [31, 50]]) {
+        const gap = z0 + 6 + Math.floor(r() * 7);
+        fill(x, z0, x + 1, gap - 1, 0, 3, M.METAL); fill(x, gap + 2, x + 1, z1, 0, 3, M.METAL);
+        for (let z = z0; z <= z1; z += 2) if (r() < 0.45 && (z < gap || z > gap + 1)) fill(x, z, x + 1, z, 3, 4 + (r() < 0.3 ? 1 : 0), M.CRATE);   // boxes on top
+      }
+    }
+    // crates and pallets in the aisles (1–2 high): hiding spots
+    for (let i = 0; i < 60; i++) {
+      const x = 3 + Math.floor(r() * 47), z = 3 + Math.floor(r() * 50), h = r() < 0.35 ? 2 : 1;
+      if (voxelAt(x, 0, z) || voxelAt(x + 1, 0, z) || (z > 24 && z < 31 && r() < 0.6)) continue;
+      fill(x, z, x + (r() < 0.5 ? 1 : 0), z, 0, h, M.CRATE);
+    }
+    // loading dock: shipping containers, open at one end (you can hide inside)
+    for (let i = 0; i < 4; i++) {
+      const z0 = 4 + i * 13, x0 = 56;
+      fill(x0, z0, x0 + 9, z0, 0, 3, M.PANEL); fill(x0, z0 + 4, x0 + 9, z0 + 4, 0, 3, M.PANEL);
+      fill(x0 + 9, z0, x0 + 9, z0 + 4, 0, 3, M.PANEL); fill(x0, z0, x0 + 9, z0 + 4, 3, 4, M.DARK);
+      if (i % 2) fill(x0 + 3, z0 + 1, x0 + 3, z0 + 1, 0, 1, M.CRATE);
+    }
+    // small office in the corner with a door
+    fill(52, D - 13, 52, D - 2, 0, 3, M.CONCRETE); fill(52, D - 13, W - 2, D - 13, 0, 3, M.CONCRETE);
+    fill(52, D - 9, 52, D - 8, 0, 3, M.AIR);
+    fill(56, D - 5, 58, D - 5, 0, 1, M.CRATE); fill(66, D - 10, 67, D - 10, 0, 2, M.METAL);
+    // support pillars
+    for (let x = 12; x < W - 2; x += 18) for (let z = 27; z <= 28; z++) fill(x, z, x, z, 0, 6, M.PILLAR);
+    seek = [[28.5, 0, 27.5]];
+  } else if (id === 'offices') {
+    W = 66; D = 66; H = 8; voxels = new Uint8Array(W * D * H);
+    const r = rng(42), N = 6, S = 10;                                   // 6×6 rooms, 10 blocks each
+    fill(0, 0, W - 1, 0, 0, 6, M.BORDER); fill(0, D - 1, W - 1, D - 1, 0, 6, M.BORDER);
+    fill(0, 0, 0, D - 1, 0, 6, M.BORDER); fill(W - 1, 0, W - 1, D - 1, 0, 6, M.BORDER);
+    for (let i = 1; i < N; i++) { fill(i * S + 3, 3, i * S + 3, D - 4, 0, 3, M.CONCRETE); fill(3, i * S + 3, W - 4, i * S + 3, 0, 3, M.CONCRETE); }
+    fill(3, 3, W - 4, 3, 0, 3, M.CONCRETE); fill(3, D - 4, W - 4, D - 4, 0, 3, M.CONCRETE);
+    fill(3, 3, 3, D - 4, 0, 3, M.CONCRETE); fill(W - 4, 3, W - 4, D - 4, 0, 3, M.CONCRETE);
+    // doors: a random maze over the rooms (every room reachable) + some extra doors for loops
+    const seen = new Set(['0,0']), stack = [[0, 0]], door = (a, b, c, d) => {
+      if (a === c) { const z = Math.max(b, d) * S + 3, x = a * S + 3 + 3 + Math.floor(r() * 4); fill(x, z, x + 1, z, 0, 3, M.AIR); }
+      else { const x = Math.max(a, c) * S + 3, z = b * S + 3 + 3 + Math.floor(r() * 4); fill(x, z, x, z + 1, 0, 3, M.AIR); }
+    };
+    while (stack.length) {
+      const [cx, cz] = stack[stack.length - 1];
+      const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [cx + dx, cz + dz]).filter(([x, z]) => x >= 0 && z >= 0 && x < N && z < N && !seen.has(x + ',' + z));
+      if (!nb.length) { stack.pop(); continue; }
+      const [nx, nz] = nb[Math.floor(r() * nb.length)];
+      door(cx, cz, nx, nz); seen.add(nx + ',' + nz); stack.push([nx, nz]);
+    }
+    for (let i = 0; i < 14; i++) { const a = Math.floor(r() * (N - 1)), b = Math.floor(r() * N); if (r() < 0.5) door(a, b, a + 1, b); else door(b, a, b, a + 1); }
+    // ways in from the hallway that runs around the building (two on every side)
+    for (const k of [1, 4]) {
+      const m0 = k * S + 3 + 4;
+      fill(m0, 3, m0 + 1, 3, 0, 3, M.AIR); fill(m0, D - 4, m0 + 1, D - 4, 0, 3, M.AIR);
+      fill(3, m0, 3, m0 + 1, 0, 3, M.AIR); fill(W - 4, m0, W - 4, m0 + 1, 0, 3, M.AIR);
+    }
+    // furniture in every room: desks, cabinets, a closet sometimes
+    for (let rx = 0; rx < N; rx++) for (let rz = 0; rz < N; rz++) {
+      const x0 = rx * S + 4, z0 = rz * S + 4;                          // room interior x0..x0+8
+      const nDesk = 1 + Math.floor(r() * 3);
+      for (let k = 0; k < nDesk; k++) { const x = x0 + 2 + Math.floor(r() * 4), z = z0 + 2 + Math.floor(r() * 5); fill(x, z, x + 1, z, 0, 1, M.CRATE); }
+      if (r() < 0.7) { const z = z0 + Math.floor(r() * 8); fill(x0 + 8, z, x0 + 8, z + 1, 0, 2, M.METAL); }       // cabinet at a wall
+      if (r() < 0.35) {                                                  // a closet with a door (great hiding spot)
+        fill(x0, z0, x0 + 2, z0, 0, 3, M.PANEL); fill(x0 + 2, z0, x0 + 2, z0 + 2, 0, 3, M.PANEL); fill(x0 + 2, z0 + 1, x0 + 2, z0 + 1, 0, 3, M.AIR);
+      }
+      if (r() < 0.25) fill(x0 + 4, z0 + 4, x0 + 4, z0 + 4, 0, 4, M.PILLAR);
+    }
+    seek = [[W / 2 - 2.5, 0, D / 2 - 2.5]];
+  }
+  // spawn points: free spots with room around them
+  const sp = [], r2 = rng(99);
+  for (let i = 0; i < 4000 && sp.length < 40; i++) {
+    const x = 2 + r2() * (W - 4), z = 2 + r2() * (D - 4);
+    if (boxBlocked(x, 0, z, 0.9) || sp.some(s => Math.hypot(s[0] - x, s[2] - z) < 4)) continue;
+    sp.push([Math.floor(x) + 0.5, 0, Math.floor(z) + 0.5]);
+  }
+  seek = seek.map(s => { for (let k = 0; k < 40; k++) { const x = s[0] + (k % 7) - 3, z = s[2] + Math.floor(k / 7) - 3; if (!boxBlocked(x, 0, z, 0.6)) return [x, 0, z]; } return s; });
+  const m = { W, D, H, voxels, SPAWNS: sp, SEEK: seek };
+  [W, D, H, voxels] = keep;
+  return m;
+}
 
 export function solid(x, y, z) {
   if (y < 0) return true;
@@ -343,9 +456,9 @@ export function fromLocal(lx, ly, lz, yaw) {
 
 // ── game modes (same numbers on server and client) ──
 export const MODE_INFO = {
-  dm:     { name: 'DEATHMATCH', time: 300, ffa: true },
-  dark:   { name: 'BLACKOUT',   time: 300, ffa: true },
-  cap:    { name: 'CAPTURE Σ',  time: 360, teams: true, limit: 3 },
+  dm:     { name: 'DEATHMATCH', time: 300, ffa: true, max: 10 },
+  hide:   { name: 'HIDE & SEEK', time: 150, hide: true, hideT: 30, max: 10 },   // 30 s to hide + 2 min to survive
+  cap:    { name: 'CAPTURE Σ',  time: 360, teams: true, limit: 3, max: 10 },
   zombie: { name: 'ZOMBIES',    solo: true, coop: true },   // solo run, or together with the party
 };
 // CAPTURE Σ: the Σ waits on top of the core in the center, each team has a base on its side

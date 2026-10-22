@@ -98,7 +98,7 @@ const MIME = {
 const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '2.0' })); }
+  if (url === '/healthz') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ready, database: dbStatus, accounts: Object.keys(accounts).length, version: '2.2' })); }
   if (url === '/api/prefs') {   // local settings store (only for the player on this PC)
     const ra = req.socket.remoteAddress || '';
     if (!/^(::1|127\.|::ffff:127\.)/.test(ra)) { res.writeHead(403); return res.end(); }
@@ -363,7 +363,7 @@ function onParty(c, m) {
 
 // ═════════════════════════ ROOMS + MATCHES ═════════════════════════
 function newRoom(id, mode) {
-  const room = { id, mode, info: world.MODE_INFO[mode], players: new Map(), zombies: new Map(),
+  const room = { id, mode, map: 'arena', info: world.MODE_INFO[mode], players: new Map(), zombies: new Map(),
     match: { phase: 'idle', ends: 0 }, fires: [], pending: [],
     sigma: { state: 'home', x: world.SIGMA_HOME[0], y: world.SIGMA_HOME[1], z: world.SIGMA_HOME[2], carrier: 0, back: 0 },
     score: [0, 0], wave: 0, toSpawn: 0, spawnT: 0, breakT: 0, nav: null, navT: 0, zkills: 0, starsRun: 0 };
@@ -372,16 +372,20 @@ function newRoom(id, mode) {
 }
 function roomFor(c, mode) {
   if (mode === 'zombie') return newRoom('z' + (nextId++), mode);        // solo: a private room for every run
-  return rooms.get(mode) || newRoom(mode, mode);
+  // up to 10 players per room; when every room of that mode is full a new one opens
+  for (const r of rooms.values()) if (r.mode === mode && r.players.size < (r.info.max || 10)) return r;
+  return newRoom(rooms.has(mode) ? mode + (nextId++) : mode, mode);
 }
 function allTargets(room) { return [...room.players.values(), ...room.zombies.values()]; }
 function sys(room, text) { broadcast(room, { t: 'chat', id: 0, name: '', text, sys: true }); }
 
 function matchInfo(room) {
-  return { t: 'match', phase: room.match.phase, left: Math.max(0, Math.round(room.match.ends - now())), score: room.score, wave: room.wave, mode: room.mode };
+  return { t: 'match', phase: room.match.phase, left: Math.max(0, Math.round(room.match.ends - now())), score: room.score, wave: room.wave, mode: room.mode,
+    map: room.map, hideLeft: room.mode === 'hide' ? Math.max(0, Math.round(room.hideEnds - now())) : 0, need: room.mode === 'hide' ? 2 : 0 };
 }
 function startMatch(room) {
   const t = now();
+  if (room.mode === 'hide' && !hideSetup(room, t)) return;
   room.match.phase = 'play';
   room.match.ends = room.info.time ? t + room.info.time : t + 1e9;
   room.fires.length = 0; room.pending.length = 0;
@@ -394,21 +398,61 @@ function startMatch(room) {
     p.kills = 0; p.deaths = 0; spawn(room, p);
     broadcast(room, { t: 'respawn', id: p.id, x: r3(p.x), y: r3(p.y), z: r3(p.z), yaw: r3(p.yaw) });
   }
-  broadcast(room, { t: 'matchstart', left: room.info.time || 0, mode: room.mode, score: room.score });
+  broadcast(room, { t: 'matchstart', left: room.info.time || 0, mode: room.mode, score: room.score, map: room.map });
+  if (room.mode === 'hide') for (const p of room.players.values()) sendRole(p);
   if (room.mode === 'cap') broadcast(room, sigmaMsg(room));
 }
 // a round is over: after the results everyone goes back to the lobby (the next round starts with PLAY)
 function backToLobby(room) {
-  for (const p of [...room.players.values()]) { send(p.ws, { t: 'tolobby' }); leaveGame(p.c); }
+  for (const p of [...room.players.values()]) { if (p.bot) { removeBot(p); continue; } send(p.ws, { t: 'tolobby' }); leaveGame(p.c); }
   room.match.phase = 'idle';
+}
+// ═════════════════ HIDE & SEEK ═════════════════
+// 30 s: hiders hide in the dark (only a flashlight), the seeker waits blind and frozen.
+// Then 2 min: the seeker hunts with a pistol (+ a light on it). All found → seeker wins, time runs out → hiders win.
+const HIDER_LO = [-1, -1, -1, -1], SEEKER_LO = [-1, world.ITEM_IDX.pistol, -1, -1];
+function hideSetup(room, t) {
+  const list = [...room.players.values()];
+  if (list.length < 2) { room.match.phase = 'wait'; room.match.ends = 0; broadcast(room, matchInfo(room)); return false; }
+  room.map = room.forceMap || world.HIDE_MAPS[Math.floor(Math.random() * world.HIDE_MAPS.length)];
+  world.setMap(room.map);
+  const nSeek = list.length >= 9 ? 3 : list.length >= 5 ? 2 : 1;
+  const order = list.slice().sort(() => Math.random() - 0.5);
+  for (const p of list) { p.role = 'hider'; p.loadout = HIDER_LO; p.w = -1; p.frozen = false; }
+  for (const p of order.slice(0, nSeek)) { p.role = 'seeker'; p.loadout = SEEKER_LO; p.w = world.ITEM_IDX.pistol; }
+  room.hideEnds = t + room.info.hideT; room.seekOn = false;
+  return true;
+}
+function sendRole(p) {
+  const room = p.room;
+  send(p.ws, { t: 'role', role: p.role, loadout: p.loadout, hideLeft: Math.max(0, Math.round((room.hideEnds || 0) - now())),
+    seekers: [...room.players.values()].filter(q => q.role === 'seeker').map(q => q.id) });
+}
+function hideCheck(room) {
+  if (room.mode !== 'hide' || room.match.phase !== 'play') return;
+  const ps = [...room.players.values()];
+  const hiders = ps.filter(p => p.role === 'hider' && !p.dead).length, seekers = ps.filter(p => p.role === 'seeker').length;
+  if (!hiders || !seekers) endMatch(room);
 }
 const rewardFor = place => place === 1 ? 50 : place <= 3 ? 20 : 10;
 function endMatch(room) {
   room.match.phase = 'results'; room.match.ends = now() + 10;
   const list = [...room.players.values()];
-  const ranked = list.length >= 2;
+  const ranked = list.filter(p => !p.bot).length >= 2;          // bots never count for ELO
   let results;
-  if (room.mode === 'cap') {
+  if (room.mode === 'hide') {
+    const hidersLeft = list.filter(p => p.role === 'hider' && !p.dead).length;
+    const seekersLeft = list.filter(p => p.role === 'seeker').length;
+    const hidersWin = hidersLeft > 0 || !seekersLeft;
+    room.hideWinner = hidersWin ? 'hide' : 'seek';
+    const won = p => p.role === 'seeker' ? !hidersWin : p.role === 'hider' ? hidersWin && !p.dead : false;
+    list.sort((a, b) => won(b) - won(a) || b.kills - a.kills);
+    results = list.filter(p => p.role !== 'spectator').map(p => {
+      const w = won(p), delta = ranked ? (w ? 50 : -15) : 0, stars = ranked ? (w ? 40 : 10) : 0;
+      if (ranked) record(p, w ? 1 : 2, delta, stars);
+      return { id: p.id, name: p.name, kills: p.kills, deaths: p.deaths, place: w ? 1 : 2, rp: delta, stars, role: p.role };
+    });
+  } else if (room.mode === 'cap') {
     const win = room.score[0] === room.score[1] ? -1 : room.score[0] > room.score[1] ? 0 : 1;
     list.sort((a, b) => (a.team === win ? 0 : 1) - (b.team === win ? 0 : 1) || b.kills - a.kills);
     results = list.map(p => {
@@ -427,9 +471,10 @@ function endMatch(room) {
     });
   }
   if (ranked) saveSoon();
-  broadcast(room, { t: 'matchend', results, ranked, next: 10, mode: room.mode, score: room.score });
+  broadcast(room, { t: 'matchend', results, ranked, next: 10, mode: room.mode, score: room.score, winner: room.hideWinner || null });
 }
 function record(p, place, delta, stars) {
+  if (p.bot) return;
   const st = statsOf(p.c.acc);
   st.matches++; if (place === 1) st.wins++;
   st.rp = Math.max(0, st.rp + delta);
@@ -441,6 +486,8 @@ function record(p, place, delta, stars) {
 
 // ───────────── players ─────────────
 function pickSpawn(room, p) {
+  world.setMap(room.map);
+  if (room.mode === 'hide' && p.role === 'seeker') return world.SEEK_SPAWNS[0];
   let list = world.SPAWNS;
   if (room.mode === 'cap') list = world.SPAWNS.filter(s => p.team === 0 ? s[0] < 20 : s[0] > 27);
   let best = list[0], bestD = -1;
@@ -475,6 +522,7 @@ function joinGame(c, mode, pulledBy) {
     if (oc && oc !== c && oc.player && oc.player.room.mode === mode && rooms.has(oc.player.room.id)) { room = oc.player.room; mate = oc.player; break; }
   }
   if (!room) room = roomFor(c, mode);
+  world.setMap(room.map);
   const loadout = world.loadoutOf(statsOf(c.acc));
   const first = loadout.find(i => i >= 0);
   const p = { id: nextId++, name: c.name, ws: c.ws, c, room, kills: 0, deaths: 0, team: -1, loadout,
@@ -484,16 +532,18 @@ function joinGame(c, mode, pulledBy) {
     const n = [0, 0]; for (const q of room.players.values()) n[q.team]++;
     p.team = mate && mate.team >= 0 ? mate.team : n[0] <= n[1] ? 0 : 1;   // party members play in one team
   }
+  if (room.mode === 'hide') { p.role = room.match.phase === 'play' ? 'spectator' : 'hider'; p.loadout = [-1, -1, -1, -1]; p.w = -1; }
   spawn(room, p);
+  if (p.role === 'spectator') { p.dead = true; p.hp = 0; }                // the round is running: watch, play the next one
   c.player = p;
   room.players.set(p.id, p);
-  send(c.ws, { t: 'welcome', id: p.id, you: pubPlayer(p), mode: room.mode, loadout,
+  send(c.ws, { t: 'welcome', id: p.id, you: pubPlayer(p), mode: room.mode, map: room.map, loadout: p.loadout,
     players: allTargets(room).map(pubPlayer), fires: room.fires.map(f => fireMsg(f)), score: room.score, wave: room.wave,
     sigma: room.mode === 'cap' ? sigmaMsg(room) : null, dev: isDevConn(c) && c.dev ? c.dev : null });
   broadcast(room, { t: 'join', p: pubPlayer(p) }, c.ws);
   if (!room.info.solo || room.players.size > 1) sys(room, `${p.name} entered the void${p.team >= 0 ? ' · team ' + world.TEAM_NAME[p.team] : ''}`);
-  if (room.match.phase === 'idle') startMatch(room);
-  else send(c.ws, matchInfo(room));
+  if (room.match.phase === 'idle' || (room.match.phase === 'wait' && room.players.size >= 2)) startMatch(room);
+  else { send(c.ws, matchInfo(room)); if (room.mode === 'hide') { sendRole(p); if (room.match.phase === 'wait') broadcast(room, matchInfo(room)); } }
   if (pulledBy) send(c.ws, { t: 'notice', text: `${pulledBy} started ${room.info.name} for the party`, ok: true });
   // the party leader pulls everyone who waits in the lobby into the same match
   if (pa && pa.leader === keyOf(c) && !pulledBy) {
@@ -511,7 +561,12 @@ function leaveGame(c) {
   broadcast(room, { t: 'leave', id: p.id });
   if (!room.info.solo || room.players.size) sys(room, `${p.name} left`);
   const pa = partyBy.get(keyOf(c)); if (pa) setTimeout(() => pushPartyAll(pa), 0);
-  if (!room.players.size) { if (room.info.solo) rooms.delete(room.id); else { room.match.phase = 'idle'; room.zombies.clear(); } }
+  if (!room.players.size) { if (room.info.solo || room.id !== room.mode) rooms.delete(room.id); else { room.match.phase = 'idle'; room.zombies.clear(); } }
+  else if (room.mode === 'hide') hideCheck(room);
+  if (room.players.size && [...room.players.values()].every(q => q.bot)) {      // nobody real left: bots go too
+    for (const q of [...room.players.values()]) removeBot(q);
+    if (room.info.solo || room.id !== room.mode) rooms.delete(room.id); else { room.match.phase = 'idle'; room.zombies.clear(); }
+  }
 }
 const owns = (p, idx) => p.loadout.includes(idx);
 
@@ -520,6 +575,7 @@ function canHurt(room, a, t) {
   if (!a || !t || a === t) return false;
   if (room.mode === 'cap' && !a.zombie && !t.zombie && a.team === t.team) return false;   // no friendly fire
   if (room.mode === 'zombie' && !a.zombie && !t.zombie) return false;
+  if (room.mode === 'hide') return a.role === 'seeker' && t.role === 'hider' && now() > room.hideEnds;   // only the seeker hurts, only after the hiding time
   return true;
 }
 // attacker may be null (e.g. the thrower of a molotov left the match)
@@ -529,6 +585,7 @@ function damage(room, target, attacker, dmg, weapon, wounds, pts) {
   if (attacker && !canHurt(room, attacker, target)) return;
   if (target.c && devOf(target.c).god && weapon !== 'dev') dmg = 0;   // dev: god mode
   if (attacker && attacker.c && devOf(attacker.c).onehit) dmg = 9999;
+  if (room.mode === 'hide' && target.role === 'hider' && weapon !== 'dev') dmg *= 2;   // 3 pistol hits find a hider
   target.hp = Math.max(0, target.hp - dmg);
   if (dmg > 0) target.lastHurt = now();
   for (const w of wounds) { target.wounds.push(w); if (target.wounds.length > 28) target.wounds.shift(); }
@@ -538,7 +595,7 @@ function damage(room, target, attacker, dmg, weapon, wounds, pts) {
   target.deaths = (target.deaths || 0) + 1;
   if (target.zombie) return zombieDied(room, target, attacker, weapon);
   if (room.mode === 'cap' && room.sigma.carrier === target.id) dropSigma(room, target);
-  const pvp = room.mode !== 'zombie';
+  const pvp = room.mode !== 'zombie' && !target.bot && !(attacker && attacker.bot);   // bot fights never touch real stats
   if (pvp) statsOf(target.c.acc).deaths++;
   if (attacker && !attacker.zombie) {
     attacker.kills++;
@@ -553,6 +610,7 @@ function damage(room, target, attacker, dmg, weapon, wounds, pts) {
   broadcast(room, { t: 'kill', victim: target.id, killer: attacker ? attacker.id : 0, w: weapon,
     vk: target.kills, vd: target.deaths, kk: attacker ? attacker.kills : 0, kd: attacker ? attacker.deaths : 0 });
   if (room.mode === 'zombie') zombiePlayerDown(room, target);
+  if (room.mode === 'hide') { if (target.role === 'hider') sys(room, `${target.name} was found${attacker ? ' by ' + attacker.name : ''}`); hideCheck(room); }
 }
 
 const tmp = {};
@@ -654,6 +712,7 @@ function onDrink(p, m) {
 function onFire(p, m) {
   const t = now(), w = m.w | 0, it = world.ITEMS[w], room = p.room;
   if (p.dead || !it || it.kind !== 'gun' || !owns(p, w)) return;
+  if (p.room.mode === 'hide' && t < p.room.hideEnds) return;
   const W = world.WEAPONS[it.id];
   if (t - (p.lastFire[w] || 0) < W.cooldown * 0.75) return;
   p.lastFire[w] = t;
@@ -886,7 +945,7 @@ function zombiePlayerDown(room, p) {
   sys(room, `${p.name} is down · back when the wave is cleared (${left} still standing)`);
 }
 function zombieTick(room, t, dt) {
-  if (room.match.phase !== 'play') return;
+  if (room.match.phase !== 'play' || room.zfrozen) return;
   const pls = livingPlayers(room);
   if (!pls.length) return;
   // waves
@@ -1009,40 +1068,193 @@ function zombieTick(room, t, dt) {
   }
 }
 
+
+// ═════════════════════════ BOTS (server-side players: for trailers, practice, filling rooms) ═════════════════════════
+// They are ordinary players to everybody else: same body, weapons, damage, kill feed, respawn.
+// Brain: pick a target it can SEE → turn toward it at a human speed → fire in bursts with aim error,
+// strafe while shooting, keep a fighting distance; no target → walk the map along the nav grid.
+const BOT_NAMES = ['Vortex_77', 'kira', 'Morozko', 'Sh4dow', 'Grimm', 'nyx', 'Raptor', 'zer0', 'Lumen', 'Volk', 'Mira', 'Kestrel', 'b1tter', 'Orion', 'Hex'];
+const NO_WS = { readyState: 3, send() {} };
+let botSkill = 0.7, botWeapon = 'random', botsFrozen = false;
+const isBot = p => !!(p && p.bot);
+function addBot(room, name) {
+  const taken = new Set([...room.players.values()].map(q => q.name));
+  name = name || BOT_NAMES.find(n => !taken.has(n)) || 'bot' + nextId;
+  const I = world.ITEM_IDX;
+  const prim = botWeapon !== 'random' && world.ITEM_IDX[botWeapon] !== undefined ? I[botWeapon] : [I.ak47, I.ak47, I.shotgun].at(Math.floor(Math.random() * 3));
+  const sec = [I.deagle, I.pistol, I.makarov].at(Math.floor(Math.random() * 3));
+  const acc = { name, stats: { rp: 0, kills: 0, deaths: 0, wins: 0, matches: 0, stars: 0, history: [], inv: [] } };
+  const c = { ws: NO_WS, name, acc, bot: true, player: null };
+  const p = { id: nextId++, name, ws: NO_WS, c, room, kills: 0, deaths: 0, team: -1, bot: true,
+    loadout: [prim, sec, I.knife, -1], w: prim, fl: 1, mags: {},
+    lastShot: 0, lastKnife: 0, lastDrink: -99, lastChat: 0, lastFire: {}, lastMelee: 0, lastMed: -99, lastThrow: 0,
+    ai: { target: null, seeT: 0, react: 0, strafe: 1, strafeT: 0, goal: null, navT: 0, holder: {}, burst: 0, reloadT: 0, vy: 0, stuckT: 0 } };
+  if (room.mode === 'cap') { const n = [0, 0]; for (const q of room.players.values()) if (q.team >= 0) n[q.team]++; p.team = n[0] <= n[1] ? 0 : 1; }
+  world.setMap(room.map);
+  spawn(room, p);
+  c.player = p;
+  room.players.set(p.id, p);
+  broadcast(room, { t: 'join', p: pubPlayer(p) });
+  if (room.match.phase === 'idle') startMatch(room);
+  return p;
+}
+function removeBot(p) {
+  const room = p.room;
+  room.players.delete(p.id);
+  broadcast(room, { t: 'leave', id: p.id });
+}
+function canSee(room, a, b) {
+  const ox = a.x, oy = a.y + world.EYE, oz = a.z, tx = b.x - ox, ty = b.y + world.BODY_CY - oy, tz = b.z - oz, d = Math.hypot(tx, ty, tz);
+  if (d < 0.01) return true;
+  const w = world.raycast(ox, oy, oz, tx / d, ty / d, tz / d, d, tmp);
+  return w < 0 || w > d - 0.6;
+}
+const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+function botTick(room, t, dt) {
+  if (room.match.phase !== 'play' || room.mode === 'hide') return;
+  for (const p of room.players.values()) {
+    if (!p.bot || p.dead || botsFrozen) continue;
+    const A = p.ai, W = world.WEAPONS;
+    // ── choose a target: the nearest enemy it can see (zombies in ZOMBIES) ──
+    if (t > A.seeT) {
+      A.seeT = t + 0.25;
+      let best = null, bd = 1e9;
+      for (const q of allTargets(room)) {
+        if (q === p || q.dead || !canHurt(room, p, q) || (q.c && devOf(q.c).invis)) continue;
+        const d = Math.hypot(q.x - p.x, q.z - p.z);
+        if (d < 45 && d < bd && canSee(room, p, q)) { bd = d; best = q; }
+      }
+      if (best !== A.target) { A.target = best; A.react = t + 0.25 + Math.random() * 0.35 * (1.3 - botSkill); }
+    }
+    const tg = A.target && !A.target.dead && room.players.has(A.target.id) || (A.target && room.zombies.has(A.target.id) && !A.target.dead) ? A.target : null;
+    // ── where to go ──
+    let goal = null;
+    if (tg) goal = tg;
+    else {
+      if (!A.goal || Math.hypot(A.goal[0] - p.x, A.goal[2] - p.z) < 2 || t > A.goalT) { A.goal = world.SPAWNS.at(Math.floor(Math.random() * world.SPAWNS.length)); A.goalT = t + 12; }
+      goal = { x: A.goal[0], z: A.goal[2] };
+    }
+    if (t > A.navT || !A.holder.nav) { buildNav(A.holder, [goal]); A.navT = t + 0.5; }
+    const dx = goal.x - p.x, dz = goal.z - p.z, dist = Math.hypot(dx, dz);
+    let gx = dx, gz = dz;
+    const nav = A.holder.nav, Wd = world.W, fx = Math.floor(p.x), fz = Math.floor(p.z), ci = fz * Wd + fx;
+    if (nav && nav[ci] > 0 && !(tg && canSee(room, p, tg) && dist < 18)) {
+      let bx = 0, bz = 0, bdv = nav[ci];
+      for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const nx = fx + ox, nz = fz + oz;
+        if (nx < 0 || nz < 0 || nx >= Wd || nz >= world.D) continue;
+        const v = nav[nz * Wd + nx];
+        if (v < 0 || v >= bdv) continue;
+        if (ox && oz && (nav[fz * Wd + nx] < 0 || nav[nz * Wd + fx] < 0)) continue;
+        bdv = v; bx = nx + 0.5 - p.x; bz = nz + 0.5 - p.z;
+      }
+      if (bx || bz) { gx = bx; gz = bz; }
+    }
+    let gl = Math.hypot(gx, gz) || 1; gx /= gl; gz /= gl;
+    let speed = 4.4;
+    // ── fighting: strafe sideways, keep 7–14 m ──
+    if (tg) {
+      if (t > A.strafeT) { A.strafe = Math.random() < 0.5 ? -1 : 1; A.strafeT = t + 0.6 + Math.random() * 1.1; }
+      const sx = -gz * A.strafe, sz = gx * A.strafe;
+      const keep = tg.zombie ? 6 : 9;
+      const fwd = dist > keep + 5 ? 1 : dist < keep - 3 ? -0.8 : 0.15;
+      gx = gx * fwd + sx * 0.85; gz = gz * fwd + sz * 0.85; gl = Math.hypot(gx, gz) || 1; gx /= gl; gz /= gl;
+      speed = 4.0;
+    }
+    // ── move with the same rules as players: walls stop, 1-block steps are jumped ──
+    const R = world.COL_R;
+    const onGround = p.y <= world.groundBelow(p.x, p.y + 0.3, p.z) + 0.01;
+    let jump = false;
+    const tryMove = (nx, nz) => {
+      if (!world.boxBlocked(nx, p.y, nz, R)) return true;
+      if (!world.boxBlocked(nx, p.y + 1.05, nz, R) && !world.boxBlocked(p.x, p.y + 1.05, p.z, R)) jump = true;
+      return false;
+    };
+    const ox0 = p.x, oz0 = p.z;
+    const mx = p.x + gx * speed * dt; if (tryMove(mx, p.z)) p.x = mx;
+    const mz = p.z + gz * speed * dt; if (tryMove(p.x, mz)) p.z = mz;
+    if (Math.hypot(p.x - ox0, p.z - oz0) < speed * dt * 0.3) { A.stuckT += dt; if (A.stuckT > 0.6) { A.strafe = -A.strafe; A.goal = null; A.stuckT = 0; } } else A.stuckT = 0;
+    if (jump && onGround && !(A.vy > 0)) A.vy = 6.6;
+    A.vy -= 18 * dt;
+    let ny = p.y + A.vy * dt;
+    const gnd = world.groundBelow(p.x, Math.max(ny, p.y) + 0.3, p.z);
+    if (ny <= gnd) { ny = gnd; A.vy = 0; }
+    p.y = ny;
+    // ── aim: turn toward the target at a human speed, with a little shake ──
+    let wantYaw, wantPitch = 0;
+    if (tg) {
+      const ax = tg.x - p.x, ay = tg.y + world.BODY_CY - (p.y + world.EYE), az = tg.z - p.z;
+      wantYaw = Math.atan2(-ax, -az); wantPitch = Math.atan2(ay, Math.hypot(ax, az));
+    } else wantYaw = Math.atan2(-gx, -gz);
+    const turn = (tg ? 5 + botSkill * 5 : 4) * dt, dy = angDiff(wantYaw, p.yaw);
+    p.yaw += Math.max(-turn, Math.min(turn, dy));
+    p.pitch += Math.max(-turn, Math.min(turn, wantPitch - p.pitch));
+    // ── shoot ──
+    if (!tg || t < A.react || t < A.reloadT) continue;
+    const aimed = Math.abs(angDiff(wantYaw, p.yaw)) < 0.1 && Math.abs(wantPitch - p.pitch) < 0.12;
+    if (!aimed) continue;
+    const w = p.w, it = world.ITEMS[w], range = it.id === 'shotgun' ? 16 : 40;
+    if (dist > range) continue;
+    // pistols / shotgun: deliberate shots; AK: bursts of 3–7 then a short pause
+    if (it.id === 'ak47') { if (A.burst <= 0) { if (t < A.burstWait) continue; A.burst = 3 + Math.floor(Math.random() * 5); } }
+    const err = (1 - botSkill) * 0.09 + 0.012 + (A.burst > 0 ? 0.01 : 0);
+    const gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) * 0.8;
+    const yaw = p.yaw + gauss() * err, pitch = p.pitch + gauss() * err;
+    const d = [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
+    if (it.kind === 'gun') {
+      const Wp = W[it.id];
+      if (t - (p.lastFire[w] || 0) < Wp.cooldown) continue;
+      onFire(p, { w, d });
+      p.mags[w] = (p.mags[w] ?? Wp.mag) - 1;
+      if (it.id === 'ak47') { A.burst--; if (A.burst <= 0) A.burstWait = t + 0.25 + Math.random() * 0.4; }
+      else p.lastFire[w] = t + Math.random() * 0.25;          // a human does not click at the exact max rate
+      if (p.mags[w] <= 0) { p.mags[w] = Wp.mag; A.reloadT = t + Wp.reload; }
+    } else if (it.id === 'shotgun') {
+      if (t - p.lastShot < W.shotgun.cooldown + 0.1) continue;
+      const pel = Array.from({ length: 8 }, () => { const a = Math.random() * 6.283, r = Math.random() * 0.055, py = pitch + Math.sin(a) * r, py2 = yaw + Math.cos(a) * r; return [-Math.sin(py2) * Math.cos(py), Math.sin(py), -Math.cos(py2) * Math.cos(py)]; });
+      onShoot(p, { d, pel });
+    }
+  }
+}
+
 // ═════════════════════════ DEVELOPER COMMANDS (F9, only WoozyWaztern) ═════════════════════════
 const RANK_NAMES = ['dot', 'blade', 'wave', 'shield', 'star', 'fortress', 'sigil', 'vortex', 'eigen'];
-const DEV_HELP = [
-  'help                         this list',
-  '── YOUR account (or add a player name) ──',
-  'stars <n> | stars +<n>       set / add stars (1m 2b 1t 1e30 googol)',
-  'stars <player> <n>           …for another player',
-  'elo [player] <n|+n>          set / add ELO (EIGEN I 15000 · III 20000)',
-  'rank [player] <name> [1-3]   dot blade wave shield star fortress sigil vortex eigen',
-  'give [player] <item|all>     ak47 makarov deagle hknife bat molotov medkit',
-  'take [player] <item|all>     remove from inventory',
-  'set [player] <stat> <n>      kills deaths wins matches bestWave zkills',
-  'resetstats [player]          zero kills/deaths/wins/matches/ELO',
-  '── moderation ──',
-  'players                      who is online + where',
-  'info <player>                ELO, stars, items, loadout, ban',
-  'kick <player> [reason]       throw out (can log in again)',
-  'ban <player> [reason]        kick + block the account',
-  'unban <player> · bans        lift a ban · list bans',
-  'db                           database status (must be ok)',
-  '── cheats (only you, any mode, also mid-match) ──',
-  'god                          infinite health (on/off)',
-  'ammo                         infinite ammo, molotovs, medkits (on/off)',
-  'speed <x> · jump <x>         run speed / jump height multiplier',
-  'fly                          fly: Space up, Ctrl down (on/off)',
-  'onehit                       every hit kills (on/off)',
-  'flags · nocheats             show what is on · turn everything off',
-  '── in a match ──',
-  'heal · tp <x> <z>            full health · teleport (map 0..48)',
-  'time <sec> · end             time left · end the match now',
-  'wave <n> · spawn <n> · killall   ZOMBIES tools',
-  'kill <player> · hurt <player> <n>   kill / damage a player in a match',
-  'clear                        clear this panel',
-];
+const DEV_HELP = {
+  '1 ACCOUNTS': [
+    'stars [p] <n|+n|1m|googol> · addstars <p> <n> · takestars <p> <n> · resetstars <p> · starsall <n>',
+    'elo [p] <n|+n> · addelo <p> <n> · takeelo <p> <n> · eloall <+n>',
+    'rank [p] <name> [1-3] · rankup <p> · rankdown <p> · rankall <name> [1-3]',
+    'give [p] <item|all> · take [p] <item|all> · giveall <p> · takeall <p> · itemsall <item>',
+    'equip <p> <item> · loadout <p> · set [p] <stat> <n> · resetstats [p] · top · richest',
+  ],
+  '2 MODERATION': [
+    'players / online · info / whois <p> · rooms · accounts · uptime · version · db',
+    'kick <p> [why] · kickall · ban <p> [why] · unban <p> · bans / banlist',
+    'mute <p> · unmute <p> · mutes · announce <text> · say <text> · notify <p> <text>',
+  ],
+  '3 CHEATS (only you)': [
+    'god · ammo · fly · onehit · invis · speed <x> · jump <x> · flags · nocheats',
+  ],
+  '4 MATCH': [
+    'heal · healall · healp <p> · sethp <p> <n> · hurt <p> <n> · kill <p> · slayall',
+    'revive <p> · reviveall · tp <x> <z> · tpto <p> · bring <p> · bringall · pos',
+    'freeze <p> · unfreeze <p> · freezeall · unfreezeall · launch <p> · push <p>',
+    'burn <p> · burnall · extinguish · fire · firering · firerain · clearfires',
+    'time <s> · addtime <s> · end · restart · night · day',
+  ],
+  '5 ZOMBIES': [
+    'wave <n> · nextwave · win · lose · spawn <n> · horde · boss · killall',
+    'zfreeze · zunfreeze · zspeed <x> · zbring · zcount',
+  ],
+  '6 CAPTURE / HIDE & SEEK': [
+    'score <red> <blue> · sigma · team <p> <0|1> · swapteams',
+    'seeker <p> · hider <p> · hidetime <s> · skiphide · map <warehouse|offices>',
+  ],
+  '7 BOTS': [
+    'bot [n] [name] · kickbots · botskill <0..1> · botweapon <ak47|shotgun|random> · botsfreeze · botsgo',
+  ],
+};
+const DEV_COUNT = 120;   // commands + aliases (help shows them all)
 // "5000", "1.5m", "2b", "1t", "3qa", "1e100", "googol" → number
 const NUM_SUFFIX = { k: 1e3, m: 1e6, b: 1e9, t: 1e12, qa: 1e15, qi: 1e18, sx: 1e21, sp: 1e24, oc: 1e27, no: 1e30, dc: 1e33 };
 function bigNum(v) {
@@ -1084,7 +1296,9 @@ function onDev(c, m) {
   if (!c.acc || c.name.toLowerCase() !== DEV_NAME) return send(c.ws, { t: 'devlog', text: 'access denied', ok: false });
   const dev = c.dev || (c.dev = { god: false, ammo: false, speed: 1, jump: 1, fly: false, onehit: false });
   const parts = String(m.cmd || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = (parts[0] || '').toLowerCase(), a1 = parts[1], a2 = parts[2];
+  let cmd = (parts[0] || '').toLowerCase();
+  cmd = { whois: 'info', banlist: 'bans', online: 'players', commands: 'help', rp: 'elo' }[cmd] || cmd;
+  const a1 = parts[1], a2 = parts[2];
   const st = statsOf(c.acc), p = c.player, room = p && p.room;
   const num = v => Number(v);
   const pushFlags = () => send(c.ws, { t: 'devset', dev });
@@ -1098,8 +1312,17 @@ function onDev(c, m) {
     devReply(c, `${target.acc.name}: ${text}`);
   };
   const toggle = (k, label) => { dev[k] = a1 === 'on' ? true : a1 === 'off' ? false : !dev[k]; pushFlags(); devReply(c, `${label}: ${dev[k] ? 'ON' : 'OFF'}`); };
+  if (devGlobal(c, cmd, parts, { tgt, done, me, dev, pushFlags, toggle, num })) return;
   switch (cmd) {
-    case 'help': case '?': for (const l of DEV_HELP) devReply(c, l); return;
+    case 'help': case '?': case 'commands': {
+      const pages = Object.entries(DEV_HELP), want = String(a1 || '').toLowerCase();
+      devReply(c, `${DEV_COUNT} commands · [p] = optional player name · help 1…6 for one page`);
+      for (const [title, lines] of pages) {
+        if (want && want !== 'all' && !title.toLowerCase().startsWith(want)) continue;
+        devReply(c, '── ' + title + ' ──'); for (const l of lines) devReply(c, '  ' + l);
+      }
+      return;
+    }
     // ── account commands: without a name they change YOUR account, with a name — that player's ──
     case 'stars': case 'elo': case 'rp': {
       const target = parts.length >= 3 ? tgt(a1) : me;
@@ -1220,12 +1443,13 @@ function onDev(c, m) {
   }
   // in-match commands
   if (!p) return devReply(c, cmd ? `unknown or match-only command: ${cmd}  (type help)` : 'type help', false);
+  if (devMatch(c, cmd, parts, p, room)) return;
   switch (cmd) {
     case 'heal': p.hp = world.MAX_HP; p.burnUntil = 0; broadcast(room, { t: 'heal', id: p.id, hp: p.hp }); return devReply(c, 'healed');
     case 'tp': {
       const x = num(a1), z = num(a2);
       if (!Number.isFinite(x) || !Number.isFinite(z)) return devReply(c, 'usage: tp 24 30', false);
-      send(c.ws, { t: 'devtp', x: Math.max(1, Math.min(47, x)), z: Math.max(1, Math.min(47, z)) }); return devReply(c, `teleported to ${x} ${z}`);
+      send(c.ws, { t: 'devtp', x: Math.max(1, Math.min(world.W - 1, x)), z: Math.max(1, Math.min(world.D - 1, z)) }); return devReply(c, `teleported to ${x} ${z}`);
     }
     case 'time': if (!Number.isFinite(num(a1))) return devReply(c, 'usage: time 30', false);
       room.match.ends = now() + Math.max(1, num(a1)); broadcast(room, matchInfo(room)); return devReply(c, `time left ${num(a1)} s`);
@@ -1253,6 +1477,193 @@ function onDev(c, m) {
     case 'killall': { let n = 0; for (const z of room.zombies.values()) if (!z.dead) { damage(room, z, p, 99999, 'dev', [], []); n++; } return devReply(c, `killed ${n}`); }
   }
   devReply(c, `unknown command: ${cmd}  (type help)`, false);
+}
+
+
+// ───── more developer commands (accounts, moderation, fun) ─────
+const STARTED = Date.now();
+const muted = new Set();
+const fmtDur = ms => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m ${s % 60}s`; };
+function onlineList() { return [...clients].filter(o => o.acc); }
+function devGlobal(c, cmd, parts, H) {
+  const a1 = parts[1], a2 = parts[2], rest = n => parts.slice(n).join(' ').slice(0, 140);
+  const R = (t, ok) => devReply(c, t, ok);
+  const addTo = (target, field, v, label) => {
+    target.st[field] = Math.max(0, Math.floor(target.st[field] + v));
+    H.done(target, `${label} = ${fmtBig(target.st[field])}`, `admin ${v >= 0 ? 'gave you' : 'took'} ${fmtBig(Math.abs(v))} ${label}`);
+  };
+  switch (cmd) {
+    case 'addstars': case 'takestars': case 'addelo': case 'takeelo': {
+      const t = H.tgt(a1); if (!t) return true;
+      const v = bigNum(a2); if (!Number.isFinite(v)) return R(`usage: ${cmd} <player> 500`, false), true;
+      addTo(t, cmd.endsWith('stars') ? 'stars' : 'rp', cmd.startsWith('take') ? -v : v, cmd.endsWith('stars') ? 'stars' : 'ELO');
+      return true;
+    }
+    case 'resetstars': { const t = H.tgt(a1); if (!t) return true; t.st.stars = 0; H.done(t, 'stars = 0', 'admin reset your stars'); return true; }
+    case 'starsall': case 'eloall': {
+      const v = bigNum(a1); if (!Number.isFinite(v)) return R(`usage: ${cmd} 500`, false), true;
+      const field = cmd === 'starsall' ? 'stars' : 'rp', list = onlineList();
+      for (const o of list) { const st = statsOf(o.acc); st[field] = Math.max(0, Math.floor(st[field] + v)); touchTarget(o.name.toLowerCase(), `admin gave everyone ${fmtBig(v)} ${field === 'rp' ? 'ELO' : '★'}`); }
+      return R(`+${fmtBig(v)} ${field === 'rp' ? 'ELO' : 'stars'} to ${list.length} players`), true;
+    }
+    case 'rankup': case 'rankdown': {
+      const t = H.tgt(a1); if (!t) return true;
+      const r = world.rankFromElo(t.st.rp); let k = r.tier * 3 + r.div + (cmd === 'rankup' ? 1 : -1);
+      k = Math.max(0, Math.min(26, k)); t.st.rp = world.rankStart(Math.floor(k / 3), k % 3);
+      const label = `${RANK_NAMES[Math.floor(k / 3)].toUpperCase()} ${['I', 'II', 'III'][k % 3]}`;
+      H.done(t, `rank ${label} · ELO ${t.st.rp}`, `admin set your rank to ${label}`); return true;
+    }
+    case 'rankall': {
+      const i = RANK_NAMES.indexOf(String(a1 || '').toLowerCase()); if (i < 0) return R('usage: rankall star 2', false), true;
+      const d = Math.max(1, Math.min(3, Number(a2) || 1)) - 1, list = onlineList();
+      for (const o of list) { statsOf(o.acc).rp = world.rankStart(i, d); touchTarget(o.name.toLowerCase(), `admin set everyone to ${a1.toUpperCase()}`); }
+      return R(`${list.length} players → ${a1.toUpperCase()} ${['I', 'II', 'III'][d]}`), true;
+    }
+    case 'giveall': case 'takeall': {
+      const t = H.tgt(a1); if (!t) return true;
+      const ids = world.ITEMS.filter(i => !i.starter).map(i => i.id);
+      if (cmd === 'giveall') { for (const id of ids) if (!t.st.inv.includes(id)) t.st.inv.push(id); }
+      else { t.st.inv = []; t.st.loadout = { ...world.DEFAULT_LOADOUT }; }
+      H.done(t, cmd === 'giveall' ? 'all items given' : 'all items taken', cmd === 'giveall' ? 'admin gave you every item' : 'admin took all your items'); return true;
+    }
+    case 'itemsall': {
+      const it = world.ITEMS.find(i => i.id === String(a1 || '').toLowerCase() && !i.starter); if (!it) return R('usage: itemsall deagle', false), true;
+      const list = onlineList();
+      for (const o of list) { const st = statsOf(o.acc); if (!st.inv.includes(it.id)) st.inv.push(it.id); touchTarget(o.name.toLowerCase(), `admin gave everyone: ${it.name}`); }
+      return R(`${it.name} → ${list.length} players`), true;
+    }
+    case 'equip': {
+      const t = H.tgt(a1); if (!t) return true;
+      const it = world.ITEMS.find(i => i.id === String(a2 || '').toLowerCase()); if (!it) return R('usage: equip <player> ak47', false), true;
+      if (!it.starter && !t.st.inv.includes(it.id)) t.st.inv.push(it.id);
+      t.st.loadout[it.cat] = it.id; H.done(t, `${it.name} equipped`, `admin equipped ${it.name} for you`); return true;
+    }
+    case 'loadout': { const t = H.tgt(a1); if (!t) return true; return R(`${t.acc.name}: ${world.CATS.map(k => `${k.id}=${t.st.loadout[k.id] || '-'}`).join('  ')}`), true; }
+    case 'top': case 'richest': {
+      const field = cmd === 'top' ? 'rp' : 'stars';
+      const list = Object.values(accounts).map(a => [a.name, statsOf(a)[field]]).sort((x, y) => y[1] - x[1]).slice(0, 10);
+      R(cmd === 'top' ? 'TOP 10 · ELO' : 'TOP 10 · stars'); list.forEach(([n, v], i) => R(`  ${i + 1}. ${n}  ${fmtBig(v)}`)); return true;
+    }
+    case 'kickall': {
+      let n = 0; for (const o of onlineList()) if (o !== c) { kickConn(o, `server restart / maintenance${rest(1) ? ': ' + rest(1) : ''}`); n++; }
+      return R(`kicked ${n} players`), true;
+    }
+    case 'mute': case 'unmute': {
+      const k = accKey(a1); if (!k) return R('usage: mute <player>', false), true;
+      if (cmd === 'mute') muted.add(k); else muted.delete(k);
+      const oc = onlineConn(k); if (oc) send(oc.ws, { t: 'notice', text: cmd === 'mute' ? 'you were muted by the admin' : 'you can chat again', ok: cmd !== 'mute' });
+      return R(`${accounts[k].name} ${cmd}d`), true;
+    }
+    case 'mutes': return R(muted.size ? [...muted].map(k => accounts[k] ? accounts[k].name : k).join(', ') : 'nobody is muted'), true;
+    case 'announce': {
+      const text = rest(1); if (!text) return R('usage: announce <text>', false), true;
+      for (const o of onlineList()) send(o.ws, { t: 'announce', text });
+      return R('announced'), true;
+    }
+    case 'say': {
+      const text = rest(1); if (!text) return R('usage: say <text>', false), true;
+      for (const r of rooms.values()) if (r.players.size) sys(r, `[admin] ${text}`);
+      for (const o of onlineList()) if (!o.player) send(o.ws, { t: 'notice', text: `[admin] ${text}`, ok: true });
+      return R('said'), true;
+    }
+    case 'notify': {
+      const k = accKey(a1), oc = k && onlineConn(k), text = rest(2);
+      if (!oc || !text) return R('usage: notify <player> <text>  (player online)', false), true;
+      send(oc.ws, { t: 'announce', text }); return R(`sent to ${oc.name}`), true;
+    }
+    case 'uptime': return R(`server up ${fmtDur(Date.now() - STARTED)} · ${onlineList().length} online · ${rooms.size} rooms`), true;
+    case 'version': return R('Eigenyth server 2.1'), true;
+    case 'accounts': return R(`${Object.keys(accounts).length} accounts · ${Object.values(accounts).filter(a => a.banned).length} banned`), true;
+    case 'rooms': {
+      if (!rooms.size) return R('no rooms'), true;
+      for (const r of rooms.values()) R(`  ${r.id} · ${(r.info || {}).name} · map ${r.map} · ${r.players.size} players · ${r.match.phase}${r.mode === 'zombie' ? ' · wave ' + r.wave : ''}`);
+      return true;
+    }
+    case 'invis': {
+      H.dev.invis = a1 === 'on' ? true : a1 === 'off' ? false : !H.dev.invis; H.pushFlags();
+      const pl = c.player; if (pl) broadcast(pl.room, H.dev.invis ? { t: 'leave', id: pl.id } : { t: 'join', p: pubPlayer(pl) }, c.ws);
+      return R(`invisible: ${H.dev.invis ? 'ON (nobody sees you)' : 'OFF'}`), true;
+    }
+  }
+  return false;
+}
+// commands that need you to be in a match (p = you, room = your room)
+function devMatch(c, cmd, parts, p, room) {
+  const a1 = parts[1], a2 = parts[2], num = Number, R = (t, ok) => devReply(c, t, ok);
+  const who = name => { const k = accKey(name), oc = k && onlineConn(k); if (!oc || !oc.player) { R(`${name || '?'}: not in a match`, false); return null; } return oc.player; };
+  const others = () => [...room.players.values()].filter(q => q !== p);
+  const healP = q => { q.hp = world.MAX_HP; q.burnUntil = 0; broadcast(q.room, { t: 'heal', id: q.id, hp: q.hp }); };
+  const revive = q => { if (!q.dead) return false; spawn(q.room, q); q.role = q.role === 'spectator' ? 'hider' : q.role; broadcast(q.room, { t: 'respawn', id: q.id, x: r3(q.x), y: r3(q.y), z: r3(q.z), yaw: r3(q.yaw) }); return true; };
+  const tpTo = (q, x, z) => send(q.ws, { t: 'devtp', x, z });
+  const addFire = (x, z, r = 1.2, life = 6) => { const f = { x, y: world.groundBelow(x, p.y + 1.5, z), z, r, until: now() + life, by: p }; room.fires.push(f); broadcast(room, fireMsg(f)); };
+  switch (cmd) {
+    case 'healall': for (const q of room.players.values()) if (!q.dead) healP(q); return R('everyone healed'), true;
+    case 'healp': { const q = who(a1); if (q) { healP(q); R(`${q.name} healed`); } return true; }
+    case 'sethp': { const q = who(a1), v = Math.max(1, Math.min(100, num(a2) || 100)); if (q && !q.dead) { q.hp = v; broadcast(room, { t: 'heal', id: q.id, hp: v }); R(`${q.name} HP = ${v}`); } return true; }
+    case 'slayall': { let n = 0; for (const q of others()) if (!q.dead) { damage(room, q, null, 99999, 'dev', [], []); n++; } return R(`slain ${n}`), true; }
+    case 'revive': { const q = who(a1); if (q) R(revive(q) ? `${q.name} revived` : `${q.name} is alive`); return true; }
+    case 'reviveall': { let n = 0; for (const q of room.players.values()) if (revive(q)) n++; return R(`revived ${n}`), true; }
+    case 'tpto': { const q = who(a1); if (q) { tpTo(p, q.x + 1.2, q.z); R(`→ ${q.name}`); } return true; }
+    case 'bring': { const q = who(a1); if (q) { tpTo(q, p.x + 1.2, p.z); R(`${q.name} brought to you`); } return true; }
+    case 'bringall': { for (const [i, q] of others().entries()) { const a = i / Math.max(1, others().length) * Math.PI * 2; tpTo(q, p.x + Math.cos(a) * 2, p.z + Math.sin(a) * 2); } return R('everyone brought'), true; }
+    case 'pos': return R(`x ${p.x.toFixed(1)} · y ${p.y.toFixed(1)} · z ${p.z.toFixed(1)} · map ${room.map}`), true;
+    case 'freeze': case 'unfreeze': { const q = who(a1); if (q) { q.frozen = cmd === 'freeze'; send(q.ws, { t: 'frozen', on: q.frozen }); R(`${q.name} ${cmd === 'freeze' ? 'frozen' : 'free'}`); } return true; }
+    case 'freezeall': case 'unfreezeall': for (const q of others()) { q.frozen = cmd === 'freezeall'; send(q.ws, { t: 'frozen', on: q.frozen }); } return R(cmd === 'freezeall' ? 'everyone frozen' : 'everyone free'), true;
+    case 'launch': { const q = who(a1); if (q) { send(q.ws, { t: 'push', vx: 0, vy: 16, vz: 0 }); R(`${q.name} launched`); } return true; }
+    case 'push': { const q = who(a1); if (q) { const dx = q.x - p.x, dz = q.z - p.z, l = Math.hypot(dx, dz) || 1; send(q.ws, { t: 'push', vx: dx / l * 14, vy: 5, vz: dz / l * 14 }); R(`${q.name} pushed`); } return true; }
+    case 'burn': { const q = who(a1); if (q) { q.burnUntil = now() + 4; q.burnBy = null; q.burnTick = now() + 0.15; R(`${q.name} is burning`); } return true; }
+    case 'burnall': for (const q of allTargets(room)) if (q !== p && !q.dead) { q.burnUntil = now() + 4; q.burnBy = q.zombie ? p : null; q.burnTick = now() + 0.15; } return R('everything burns'), true;
+    case 'extinguish': for (const q of allTargets(room)) q.burnUntil = 0; room.fires.length = 0; broadcast(room, { t: 'nofire' }); return R('all fires out'), true;
+    case 'clearfires': room.fires.length = 0; broadcast(room, { t: 'nofire' }); return R('fires cleared'), true;
+    case 'fire': { const d = 2.5; addFire(p.x - Math.sin(p.yaw) * d, p.z - Math.cos(p.yaw) * d); return R('fire!'), true; }
+    case 'firering': for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2; addFire(p.x + Math.cos(a) * 3.5, p.z + Math.sin(a) * 3.5, 0.9); } return R('ring of fire'), true;
+    case 'firerain': for (let i = 0; i < 12; i++) addFire(Math.max(1, Math.min(world.W - 1, p.x + (Math.random() - 0.5) * 22)), Math.max(1, Math.min(world.D - 1, p.z + (Math.random() - 0.5) * 22)), 0.7 + Math.random() * 0.8); return R('fire rain'), true;
+    case 'addtime': { const v = num(a1); if (!Number.isFinite(v)) return R('usage: addtime 60', false), true; room.match.ends += v; broadcast(room, matchInfo(room)); return R(`${v > 0 ? '+' : ''}${v} s`), true; }
+    case 'restart': room.match.phase = 'idle'; startMatch(room); return R('match restarted'), true;
+    case 'night': case 'day': broadcast(room, { t: 'night', on: cmd === 'night' }); return R(cmd === 'night' ? 'lights out' : 'lights on'), true;
+    // zombies
+    case 'nextwave': case 'win': case 'lose': case 'horde': case 'boss': case 'zfreeze': case 'zunfreeze': case 'zspeed': case 'zbring': case 'zcount': {
+      if (room.mode !== 'zombie') return R('only in ZOMBIES', false), true;
+      if (cmd === 'nextwave') { for (const z of room.zombies.values()) if (!z.dead) damage(room, z, p, 99999, 'dev', [], []); room.toSpawn = 0; return R('wave skipped'), true; }
+      if (cmd === 'win') { room.wave = world.ZOMBIE_WAVES; zombieGameOver(room, true); return R('ZOMBIES won'), true; }
+      if (cmd === 'lose') { zombieGameOver(room, false); return R('run lost'), true; }
+      if (cmd === 'horde') { for (let i = 0; i < 30; i++) spawnZombie(room, Math.max(1, room.wave)); return R('a horde of 30'), true; }
+      if (cmd === 'boss') { const z = spawnZombie(room, Math.max(1, room.wave) + 10); z.hp = z.maxHp = 2500; z.speed *= 0.8; z.dmg = 40; broadcast(room, { t: 'join', p: pubPlayer(z) }); sys(room, 'a BOSS zombie appears!'); return R('boss spawned (2500 HP)'), true; }
+      if (cmd === 'zfreeze' || cmd === 'zunfreeze') { room.zfrozen = cmd === 'zfreeze'; return R(room.zfrozen ? 'zombies frozen' : 'zombies move again'), true; }
+      if (cmd === 'zspeed') { const v = Math.max(0.1, Math.min(5, num(a1) || 1)); for (const z of room.zombies.values()) z.speed *= v; return R(`zombie speed ×${v}`), true; }
+      if (cmd === 'zbring') { for (const z of room.zombies.values()) { z.x = p.x + (Math.random() - 0.5) * 8; z.z = p.z + (Math.random() - 0.5) * 8; } return R('zombies teleported to you'), true; }
+      const alive = [...room.zombies.values()].filter(z => !z.dead).length;
+      return R(`wave ${room.wave}/${world.ZOMBIE_WAVES} · alive ${alive} · to spawn ${room.toSpawn} · kills ${room.zkills}`), true;
+    }
+    // capture
+    case 'score': if (room.mode !== 'cap') return R('only in CAPTURE', false), true;
+      room.score = [Math.max(0, num(a1) | 0), Math.max(0, num(a2) | 0)]; broadcast(room, sigmaMsg(room)); broadcast(room, matchInfo(room)); return R(`score ${room.score.join(' : ')}`), true;
+    case 'sigma': if (room.mode !== 'cap') return R('only in CAPTURE', false), true; resetSigma(room); return R('Σ is back home'), true;
+    case 'team': { const q = who(a1); if (!q) return true; if (room.mode !== 'cap') return R('only in CAPTURE', false), true; q.team = num(a2) === 1 ? 1 : 0; spawn(room, q); broadcast(room, { t: 'respawn', id: q.id, x: r3(q.x), y: r3(q.y), z: r3(q.z), yaw: r3(q.yaw) }); broadcast(room, { t: 'team', id: q.id, team: q.team }); return R(`${q.name} → ${world.TEAM_NAME[q.team]}`), true; }
+    case 'swapteams': if (room.mode !== 'cap') return R('only in CAPTURE', false), true;
+      for (const q of room.players.values()) { q.team = 1 - q.team; broadcast(room, { t: 'team', id: q.id, team: q.team }); } return R('teams swapped'), true;
+    // hide & seek
+    case 'seeker': case 'hider': {
+      const q = who(a1); if (!q) return true; if (room.mode !== 'hide') return R('only in HIDE & SEEK', false), true;
+      q.role = cmd; q.loadout = cmd === 'seeker' ? SEEKER_LO : HIDER_LO; q.w = cmd === 'seeker' ? world.ITEM_IDX.pistol : -1;
+      for (const o of room.players.values()) sendRole(o);
+      return R(`${q.name} is now a ${cmd}`), true;
+    }
+    case 'hidetime': { if (room.mode !== 'hide') return R('only in HIDE & SEEK', false), true; room.hideEnds = now() + Math.max(0, num(a1) || 0); room.seekOn = false; for (const o of room.players.values()) sendRole(o); return R(`hiding time ${num(a1) || 0} s`), true; }
+    case 'skiphide': { if (room.mode !== 'hide') return R('only in HIDE & SEEK', false), true; room.hideEnds = now(); for (const o of room.players.values()) sendRole(o); return R('seeking starts now'), true; }
+    case 'bot': case 'bots': {
+      if (room.mode === 'hide') return R('bots play DEATHMATCH, CAPTURE and ZOMBIES', false), true;
+      const n = Math.max(1, Math.min(9, num(a1) || 1));
+      const added = []; for (let i = 0; i < n && room.players.size < 16; i++) added.push(addBot(room, n === 1 && a2 ? a2 : null).name);
+      return R(`bots joined: ${added.join(', ')} · skill ${botSkill}`), true;
+    }
+    case 'kickbots': { const list = [...room.players.values()].filter(q => q.bot); for (const q of list) removeBot(q); return R(`removed ${list.length} bots`), true; }
+    case 'botskill': { const v = Math.max(0, Math.min(1, Number(a1))); if (!Number.isFinite(v)) return R('usage: botskill 0.7  (0 = blind, 1 = sharp)', false), true; botSkill = v; return R(`bot skill ${v}`), true; }
+    case 'botweapon': { const id = String(a1 || '').toLowerCase(); if (id !== 'random' && !['ak47', 'shotgun'].includes(id)) return R('usage: botweapon ak47 | shotgun | random  (for new bots)', false), true; botWeapon = id; return R(`new bots carry: ${id}`), true; }
+    case 'botsfreeze': case 'botsgo': botsFrozen = cmd === 'botsfreeze'; return R(botsFrozen ? 'bots stand still' : 'bots move again'), true;
+    case 'map': { if (!world.MAP_INFO[a1]) return R('maps: ' + Object.keys(world.MAP_INFO).join(' '), false), true; room.forceMap = a1; return R(`next round on ${a1} (restart to play it now)`), true; }
+  }
+  return false;
 }
 
 // ═════════════════════════ CONNECTIONS ═════════════════════════
@@ -1305,12 +1716,15 @@ attach(server, '/ws', ws => {
     if (m.t === 'leave') return leaveGame(c);
     const p = c.player;
     if (!p) return;
+    world.setMap(p.room.map);
 
     switch (m.t) {
       case 'st': {
         if (p.dead) break;
         const { x, y, z, yaw, pitch, w } = m;
-        if ([x, y, z, yaw, pitch].every(Number.isFinite)) {
+        const frozen = p.frozen || (p.room.mode === 'hide' && p.role === 'seeker' && now() < p.room.hideEnds);
+        if (frozen) { if (Number.isFinite(yaw)) { p.yaw = yaw; p.pitch = pitch; } }
+        else if ([x, y, z, yaw, pitch].every(Number.isFinite)) {
           p.x = Math.max(0, Math.min(world.W, x)); p.y = Math.max(0, Math.min(world.H + 6, y));
           p.z = Math.max(0, Math.min(world.D, z)); p.yaw = yaw; p.pitch = pitch;
         }
@@ -1330,6 +1744,7 @@ attach(server, '/ws', ws => {
         if (t - p.lastChat < 0.35) break;
         p.lastChat = t;
         const text = String(m.text || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120);
+        if (muted.has(p.name.toLowerCase())) { send(p.ws, { t: 'notice', text: 'you are muted', ok: false }); break; }
         if (text) broadcast(p.room, { t: 'chat', id: p.id, name: p.name, text });
         break;
       }
@@ -1344,8 +1759,14 @@ setInterval(() => {
   const t = now(), dt = Math.min(0.1, t - lastTick); lastTick = t;
   for (const room of rooms.values()) {
     if (!room.players.size) continue;
+    world.setMap(room.map);
+    if (room.mode === 'hide' && room.match.phase === 'play' && !room.seekOn && t > room.hideEnds) {
+      room.seekOn = true;
+      broadcast(room, { t: 'seekstart', left: Math.round(room.match.ends - t) });
+      sys(room, 'the seeker is coming…');
+    }
     for (const p of room.players.values()) {
-      if (p.dead && t > p.deadUntil && room.mode !== 'zombie') {
+      if (p.dead && t > p.deadUntil && room.mode !== 'zombie' && room.mode !== 'hide') {
         spawn(room, p);
         broadcast(room, { t: 'respawn', id: p.id, x: r3(p.x), y: r3(p.y), z: r3(p.z), yaw: r3(p.yaw) });
       }
@@ -1356,6 +1777,7 @@ setInterval(() => {
       p.regen = (p.regen || 0) + 7 * dt;
       if (p.regen >= 1) { const k = Math.floor(p.regen); p.regen -= k; p.hp = Math.min(world.MAX_HP, p.hp + k); }
     }
+    botTick(room, t, dt);
     fireTick(room, t);
     if (room.mode === 'cap') captureTick(room, t);
     if (room.mode === 'zombie') zombieTick(room, t, dt);
@@ -1364,7 +1786,12 @@ setInterval(() => {
     const snap = { t: 's', p: allTargets(room).map(p =>
       [p.id, r3(p.x), r3(p.y), r3(p.z), r3(p.yaw), r3(p.pitch), p.w, p.hp, p.dead ? 1 : 0, p.burnUntil > t ? 1 : 0, p.team, p.zombie ? 1 : 0, p.fl === 0 ? 0 : 1]) };
     if (room.mode === 'cap' && room.sigma.state === 'carried') snap.sg = [r3(room.sigma.x), r3(room.sigma.y), r3(room.sigma.z)];
-    broadcast(room, snap);
+    const inv = [...room.players.values()].filter(q => devOf(q.c).invis);
+    if (!inv.length) broadcast(room, snap);
+    else {                                      // dev 'invis': the others don't get that player at all
+      const ids = new Set(inv.map(q => q.id)), full = JSON.stringify(snap), part = JSON.stringify({ ...snap, p: snap.p.filter(a => !ids.has(a[0])) });
+      for (const q of room.players.values()) if (q.ws.readyState === 1) q.ws.send(ids.has(q.id) ? full : part);
+    }
   }
 }, 50);
 

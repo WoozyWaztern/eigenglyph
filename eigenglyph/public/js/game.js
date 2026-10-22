@@ -25,7 +25,7 @@ const KF_ICON = { zombie: ' >(x)< ', dev: ' {dev} ', shotgun: ' =[==> ', knife: 
 const MELEE_T = { 5: 0.42, 6: 0.62 };         // swing animation length
 const FIRE_CH = '^*\'",.';
 const ZOMBIE_TINT = [78, 118, 70];
-const MODE_TITLE = { dm: 'DEATHMATCH', cap: 'CAPTURE Σ', dark: 'BLACKOUT', zombie: 'ZOMBIES' };
+const MODE_TITLE = { dm: 'DEATHMATCH', cap: 'CAPTURE Σ', hide: 'HIDE & SEEK', zombie: 'ZOMBIES' };
 const TINTS = [[104, 108, 118], [122, 100, 98], [96, 114, 106], [100, 102, 126], [122, 114, 92], [112, 96, 118], [90, 112, 122]];
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -68,11 +68,13 @@ export class Game {
     this.sendT = 0;
     this.myId = welcome.id;
     this.mode = welcome.mode || 'dm';
+    WD.setMap(welcome.map || 'arena');                        // HIDE & SEEK plays on its own big maps
+    this.role = null; this.seekers = new Set(); this.hideEnd = 0; this.night = false;
     this.score = welcome.score || [0, 0];
     this.wave = welcome.wave || 0; this.waveMsg = null; this.zend = null;
     this.sigma = welcome.sigma || null;
     this.dev = welcome.dev || this.app.devFlags || null;
-    this.flashlight = true; this.lights = [];
+    this.flashlight = this.mode !== 'hide'; this.lights = [];
     const y = welcome.you;
     this.me = {
       id: y.id, name: y.name, x: y.x, y: y.y, z: y.z, vx: 0, vy: 0, vz: 0, yaw: y.yaw, pitch: 0,
@@ -122,19 +124,42 @@ export class Game {
     const A = this.app.audio, me = this.me;
     switch (m.t) {
       case 'join': if (m.p.id !== this.myId) { const o = this.addOther(m.p); if (o.zombie) { const [pan, vol] = this.spatial(o.x, o.z); A.groan(pan, vol); } } break;
-      case 'match': this.match = { phase: m.phase, ends: this.time + m.left }; if (m.score) this.score = m.score; if (m.wave !== undefined) this.wave = m.wave; break;
+      case 'match': this.match = { phase: m.phase, ends: this.time + m.left, need: m.need }; if (m.score) this.score = m.score; if (m.wave !== undefined) this.wave = m.wave;
+        if (m.hideLeft) this.hideEnd = this.time + m.hideLeft; break;
+      case 'role': {
+        // HIDE & SEEK: hider (nothing but a flashlight) / seeker (pistol + gun light) / spectator (round already running)
+        this.role = m.role; this.seekers = new Set(m.seekers || []);
+        this.hideEnd = this.time + (m.hideLeft || 0);
+        this.loadout = m.loadout || [-1, -1, -1, -1];
+        const wp = this.wp; wp.w = this.loadout.find(i => i >= 0) ?? -1; wp.equip = 1; wp.mags = fullMags();
+        if (m.role === 'spectator') { me.dead = true; me.deadT = 9; me.hp = 0; me.killer = ''; }
+        this.flashlight = m.role === 'seeker';
+        if (m.role !== 'spectator') this.roleMsg = { role: m.role, t: 4 };
+        break;
+      }
+      case 'announce': this.announce = { text: m.text, t: 5 }; this.app.audio.chat && this.app.audio.chat(); break;
+      case 'night': this.night = !!m.on; break;
+      case 'frozen': this.frozen = !!m.on; if (m.on) this.centerMsg = { text: 'FROZEN by the admin', t: 2, col: [140, 190, 255] }; break;
+      case 'nofire': this.fires = []; me.burn = false; break;
+      case 'team': { const o = m.id === this.myId ? me : this.others.get(m.id); if (o) { o.team = m.team; if (o !== me) o.tint = WD.TEAM_COL[m.team].map(v => v * 0.62 + 30); } break; }
+      case 'seekstart':
+        this.hideEnd = Math.min(this.hideEnd, this.time); this.roleMsg = null;
+        this.centerMsg = { text: this.role === 'seeker' ? 'G O   ·   F I N D   T H E M' : 'THE SEEKER IS COMING  ·  stay hidden', t: 3, col: this.role === 'seeker' ? [230, 80, 70] : [120, 210, 140] };
+        this.app.audio.rankUp && this.app.audio.groan(0, 0.8);
+        break;
       case 'matchstart':
+        if (m.map) WD.setMap(m.map);
         this.match = { phase: 'play', ends: this.time + (m.left || 1e9) };
         this.fires = []; this.projectiles = [];
         this.results = null; this.zend = null; this.killfeed = [];
         this.score = m.score || [0, 0]; this.wave = 0;
         me.kills = me.deaths = 0;
         for (const o of this.others.values()) o.kills = o.deaths = 0;
-        this.centerMsg = { text: { dm: 'DEATHMATCH  ·  5:00  ·  GO', cap: 'CAPTURE Σ  ·  bring the Σ to your base', dark: 'BLACKOUT  ·  F = flashlight', zombie: 'ZOMBIES  ·  survive' }[this.mode], t: 3 };
+        this.centerMsg = { text: { dm: 'DEATHMATCH  ·  5:00  ·  GO', cap: 'CAPTURE Σ  ·  bring the Σ to your base', hide: 'HIDE & SEEK  ·  F = flashlight', zombie: 'ZOMBIES  ·  survive' }[this.mode], t: 3 };
         break;
       case 'matchend':
         this.match = { phase: 'results', ends: this.time + m.next };
-        this.results = { list: m.results, ranked: m.ranked, t: m.next, score: m.score };
+        this.results = { list: m.results, ranked: m.ranked, t: m.next, score: m.score, winner: m.winner };
         break;
       case 'sigma': this.sigma = m; if (m.score) this.score = m.score; break;
       case 'capture': {
@@ -451,7 +476,8 @@ export class Game {
     if (this.sigma && this.sigma.state === 'carried' && this.sigma.carrier === this.myId) speed *= 0.72;   // the Σ is heavy
     const dev = this.dev;
     if (dev && dev.speed) speed *= dev.speed;
-    if (ctrl && inp.pressed.has('KeyF') && this.mode === 'dark') { this.flashlight = !this.flashlight; A.click(); }
+    if (ctrl && inp.pressed.has('KeyF') && this.isDark()) { this.flashlight = !this.flashlight; A.click(); }
+    if (this.seekerWaiting() || this.frozen) speed = 0;                    // HIDE & SEEK: the seeker waits while the others hide
     const fl = Math.hypot(mx, mz) || 1;
     const fwx = -Math.sin(me.yaw), fwz = -Math.cos(me.yaw), rgx = Math.cos(me.yaw), rgz = -Math.sin(me.yaw);
     const tvx = (fwx * mz + rgx * mx) / fl * speed, tvz = (fwz * mz + rgz * mx) / fl * speed;
@@ -646,6 +672,8 @@ export class Game {
     return { id: -1, sigma: true, x, y: y - 1.2, z, yaw, prims: out, tint: [240, 200, 90], wounds: [], dead: false, bx: x, by: y, bz: z, br: 0.7, burn: false };
   }
   // BLACKOUT: every light in the dark — your flashlight, other flashlights, shots, fire
+  isDark() { return this.mode === 'hide' || this.night; }
+  seekerWaiting() { return this.mode === 'hide' && this.role === 'seeker' && this.time < this.hideEnd && this.match && this.match.phase === 'play'; }
   darkLights(cam) {
     const L = [];
     const spot = (x, y, z, yaw, pitch, k) => {
@@ -681,7 +709,7 @@ export class Game {
         flame(f.x + Math.cos(a) * r, f.y + 0.02, f.z + Math.sin(a) * r, ph, k, hash(i, Math.floor(T * 5)), tall, 0.2 + h1 * 0.1, i * 1.3);
       }
     });
-    if (this.mode === 'dark') for (const o of players) {
+    if (this.isDark()) for (const o of players) {
       // BLACKOUT: a lit flashlight is a bright dot everybody can see
       if (o.dead || o.zombie || o.sigma || !o.fl) continue;
       const cp = Math.cos(o.pitch || 0);
@@ -1107,7 +1135,7 @@ export class Game {
       flash: this.flash * 0.5, muzzleFlash: wp.w === 0 || WD.isGun(wp.w) ? this.muzzleFlash : 0, vmMuzzle: app.vm.muzzle, flashSeed: this.flashSeed,
       fires: this.fires, time: this.time,
       zones: this.mode === 'cap' ? WD.CAP_BASES.map((b, i) => [b[0], b[2], WD.CAP_BASE_R, ...WD.TEAM_COL[i]]) : null,
-      dark: this.mode === 'dark' ? this.darkLights(cam) : null,
+      dark: this.isDark() ? this.darkLights(cam) : null, map: WD.MAP,
     });
     this.drawHUD(dt, players.filter(p => !p.sigma));
   }
@@ -1154,7 +1182,7 @@ export class Game {
       const ci = Math.max(0, Math.min(rows - 1, hy + 1)) * cols + Math.max(0, Math.min(cols - 1, hx));
       const t = WD.raycast(R.cam.pos[0], R.cam.pos[1], R.cam.pos[2], (o.x - R.cam.pos[0]) / dist, (o.y + 1.75 - R.cam.pos[1]) / dist, (o.z - R.cam.pos[2]) / dist, dist, rc);
       if (t > 0 && t < dist - 0.5) continue;
-      if (this.mode === 'dark' && dist > 6 && !o.fl) continue;          // BLACKOUT: names only up close (or a lit flashlight)
+      if (this.isDark() && dist > (this.role === 'seeker' ? 4 : 6) && !o.fl) continue;   // dark: names only up close (or a lit flashlight)
       const fade = clamp(1.4 - dist / 35, 0.35, 1);
       const tc = o.team >= 0 ? WD.TEAM_COL[o.team] : [180, 184, 190];
       const nameCol = [tc[0] * fade, tc[1] * fade, tc[2] * fade];
@@ -1250,12 +1278,20 @@ export class Game {
           const alive = [...this.others.values()].filter(o => o.zombie && !o.dead).length;
           scr.text(3 + title.length, 1, `wave ${this.wave} / ${WD.ZOMBIE_WAVES}`, C.bright);
           scr.text(2, 2, `zombies ${alive} · kills ${me.kills}`, C.dim);
+        } else if (this.mode === 'hide') {
+          const hl = Math.max(0, this.hideEnd - this.time);
+          const hiders = [...this.others.values()].filter(o => !o.zombie && !o.dead && !this.seekers.has(o.id)).length + (this.role === 'hider' && !me.dead ? 1 : 0);
+          if (hl > 0) scr.text(3 + [...title].length, 1, `hide!  the seeker comes in ${Math.ceil(hl)}`, [120, 210, 140]);
+          else scr.text(3 + [...title].length, 1, `${mm}:${ss}  ·  ${this.role === 'seeker' ? 'find them' : 'survive'}`, left < 30 ? C.red : C.bright);
+          const rl = this.role === 'seeker' ? 'SEEKER · pistol · find everyone' : this.role === 'hider' ? 'HIDER · stay hidden until the time runs out' : 'watching · next round soon';
+          scr.text(2, 2, `${rl}  ·  hiders left ${hiders}`, this.role === 'seeker' ? [230, 110, 100] : C.dim);
         } else {
           scr.text(3 + [...title].length, 1, `${mm}:${ss}`, left < 30 ? C.red : C.bright);
           scr.text(2, 2, `kills ${me.kills}`, C.dim);
         }
-        if (this.mode === 'dark') scr.text(2, 3, `F · flashlight ${this.flashlight ? 'ON' : 'off'}`, this.flashlight ? [230, 220, 170] : C.line);
-      } else if (!this.zend) scr.text(2, 1, `back to the lobby in ${Math.ceil(left)}`, C.dim);
+        if (this.isDark()) scr.text(2, 3, `F · flashlight ${this.flashlight ? 'ON' : 'off'}`, this.flashlight ? [230, 220, 170] : C.line);
+      } else if (this.match.phase === 'wait') scr.text(2, 1, 'HIDE & SEEK  ·  waiting for a 2nd player (invite a friend)…', C.bright);
+      else if (!this.zend) scr.text(2, 1, `back to the lobby in ${Math.ceil(left)}`, C.dim);
     }
     if (this.mode === 'cap') this.drawCaptureHUD();
     if (this.waveMsg) {
@@ -1346,15 +1382,38 @@ export class Game {
       }
     }
 
+    // ── admin announcement ──
+    if (this.announce && (this.announce.t -= dt) > 0) {
+      const t = ` ★ ${this.announce.text} ★ `;
+      scr.textC(Math.floor(rows * 0.18), t, [255, 230, 150], [60, 40, 10]);
+    }
+    // ── HIDE & SEEK: the seeker waits blind; role banner ──
+    if (this.seekerWaiting()) {
+      scr.fill(0, 0, cols, rows - 3, ' ', null, [0, 0, 0]);
+      scr.fine.clear(0, 0, 0);
+      const hl = Math.ceil(Math.max(0, this.hideEnd - this.time));
+      scr.textC(Math.floor(rows * 0.4), 'Y O U   A R E   T H E   S E E K E R', [230, 80, 70], [0, 0, 0]);
+      scr.textC(Math.floor(rows * 0.4) + 2, `eyes closed · the others are hiding · ${hl}`, [200, 200, 205], [0, 0, 0]);
+      scr.textC(Math.floor(rows * 0.4) + 4, 'then find them with your pistol before 2:00 runs out', C.dim, [0, 0, 0]);
+    } else if (this.roleMsg && (this.roleMsg.t -= dt) > 0 && this.role === 'hider') {
+      scr.textC(Math.floor(rows * 0.22), 'H I D E !', [120, 220, 140]);
+      scr.textC(Math.floor(rows * 0.22) + 2, '30 seconds · find a dark corner · F = flashlight (it gives you away)', C.dim);
+    }
     // ── death screen ──
     if (me.dead) {
       const k = clamp(me.deadT / 1.2, 0, 1);
       scr.dim(0, 0, cols, rows - 3, 1 - k * 0.55);
       const left = Math.max(0, 3.5 - me.deadT);
       if (me.deadT > 0.6) {
+        if (this.mode === 'hide') {
+          scr.textC(Math.floor(rows * 0.42), this.role === 'spectator' ? '─────  R O U N D   I N   P R O G R E S S  ─────' : '─────  F O U N D  ─────', [200, 40, 46]);
+          scr.textC(Math.floor(rows * 0.42) + 2, this.role === 'spectator' ? 'you play in the next round' : `the seeker ${me.killer} got you · wait for the round to end`, C.dim);
+        } else {
         scr.textC(Math.floor(rows * 0.42), '─────  Y O U   D I E D  ─────', [200, 40, 46]);
         scr.textC(Math.floor(rows * 0.42) + 2, `killed by ${me.killer}`, C.dim);
-        if (this.mode !== 'zombie') scr.textC(Math.floor(rows * 0.42) + 3, `respawn in ${left.toFixed(1)}`, C.dim);
+        }
+        if (this.mode === 'hide') {}
+        else if (this.mode !== 'zombie') scr.textC(Math.floor(rows * 0.42) + 3, `respawn in ${left.toFixed(1)}`, C.dim);
         else {
           const mates = [...this.others.values()].filter(o => !o.zombie && !o.dead).length;
           if (mates && !this.zend) scr.textC(Math.floor(rows * 0.42) + 3, `${mates} teammate${mates > 1 ? 's' : ''} still fighting · you come back when the wave is cleared`, C.dim);
@@ -1443,6 +1502,7 @@ export class Game {
     scr.box(x, y, w, h, C.dim, C.panel);
     const mine = list.find(r => r.id === this.myId);
     let title = mine && mine.place === 1 ? 'V I C T O R Y' : 'M A T C H   O V E R';
+    if (this.mode === 'hide') title = res.winner === 'seek' ? 'T H E   S E E K E R   W I N S' : 'T H E   H I D E R S   W I N';
     if (this.mode === 'cap' && res.score) { const [a, b] = res.score; title = a === b ? `D R A W   ${a} : ${b}` : `${a > b ? 'RED' : 'BLUE'} WINS  ${a} : ${b}`; }
     scr.textC(y + 1, title, mine && mine.place === 1 ? [244, 214, 120] : C.bright, C.panel, x + w / 2);
     scr.text(x + 3, y + 3, '#   PLAYER', C.dim, C.panel);
@@ -1452,7 +1512,7 @@ export class Game {
       const me = r.id === this.myId, c = me ? C.bright : C.text;
       const yy = y + 5 + i;
       scr.text(x + 3, yy, String(r.place), r.place === 1 ? [244, 214, 120] : c, C.panel);
-      scr.text(x + 7, yy, r.name, r.team >= 0 ? WD.TEAM_COL[r.team] : c, C.panel);
+      scr.text(x + 7, yy, r.name + (r.role === 'seeker' ? '  (seeker)' : ''), r.team >= 0 ? WD.TEAM_COL[r.team] : r.role === 'seeker' ? [230, 110, 100] : c, C.panel);
       scr.text(x + w - 24, yy, String(r.kills).padEnd(5) + String(r.deaths).padEnd(5), c, C.panel);
       const rp = res.ranked ? (r.rp > 0 ? `+${r.rp}` : String(r.rp)) : '-';
       scr.text(x + w - 14, yy, rp, r.rp > 0 ? [110, 190, 130] : r.rp < 0 ? [200, 80, 80] : C.dim, C.panel);

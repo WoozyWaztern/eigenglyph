@@ -180,7 +180,7 @@ export class Renderer {
     for (const p of players) for (const q of p.prims) q.bR = q.type === 0 ? q.sx : Math.hypot(q.sx, q.sy || q.sx, q.sz) + (q.type === 1 ? 0 : q.sx);
     const fires = (scene.fires || []).map(f => [f.x, f.y, f.z, f.r, Math.min(1, f.life / 1.2) * Math.min(1, (f.max - f.life) / 0.25 + 0.3)]);
     const C = { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, gFire, fires, time: scene.time || 0, ox, oy, oz,
-      dark: scene.dark || null, zones: scene.zones || null, fx, fy, fz, rx, ry, rz, ux, uy, uz,
+      dark: scene.dark || null, zones: scene.zones || null, map: scene.map || WD.MAP, fx, fy, fz, rx, ry, rz, ux, uy, uz,
       tanX, tanY, vmTanX, vmTanY, flash, rects, vx0, vx1, vy0, vy1, decals: decals || new Map(),
       players: players.map(p => ({ prims: p.prims, tint: p.tint, wounds: p.wounds, yaw: p.yaw, dead: p.dead, x: p.x, z: p.z, y: p.y, burn: p.burn, zombie: p.zombie, sigma: p.sigma, bx: p.bx, by: p.by, bz: p.bz, br: p.br })),
       vm };
@@ -314,6 +314,7 @@ function buildTiles(C) {
   C.tileStart = tileStart; C.tileIdx = tileIdx; C.tcols = tcols;
 }
 export function traceRows(C, y0, y1, base, A, B, depth, vmId, step = 1) {
+  if (C.map && WD.MAP !== C.map) WD.setMap(C.map);          // render workers keep their own copy of the map
   if (!C.tileStart) buildTiles(C);
   const { cols, rows, rampG, gSpace, gDot, gStar, gX, gSigma, gO, gWound, gFire, fires, time, ox, oy, oz, fx, fy, fz, rx, ry, rz, ux, uy, uz,
     tanX, tanY, vmTanX, vmTanY, flash, players, rects, vm, vx0, vx1, vy0, vy1, decals, tileStart, tileIdx, tcols } = C;
